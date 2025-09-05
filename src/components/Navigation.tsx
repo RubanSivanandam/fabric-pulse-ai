@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Monitor, FileText, Factory } from 'lucide-react';
+import { Monitor, FileText, Factory, Building2 } from 'lucide-react';
 import ProductionDashboard from './ProductionDashboard';
 import ProjectDocumentation from './ProjectDocumentation';
+import HierarchicalMonitor from './HierarchicalMonitor';
 
 const Navigation = () => {
-  const [currentView, setCurrentView] = useState<'dashboard' | 'documentation'>('dashboard');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'documentation' | 'hierarchical'>('dashboard');
 
   return (
     <div className="min-h-screen bg-background">
@@ -28,6 +29,14 @@ const Navigation = () => {
                 Live Dashboard
               </Button>
               <Button
+                variant={currentView === 'hierarchical' ? 'default' : 'outline'}
+                onClick={() => setCurrentView('hierarchical')}
+                className="flex items-center gap-2"
+              >
+                <Building2 className="h-4 w-4" />
+                Hierarchical Monitor
+              </Button>
+              <Button
                 variant={currentView === 'documentation' ? 'default' : 'outline'}
                 onClick={() => setCurrentView('documentation')}
                 className="flex items-center gap-2"
@@ -42,7 +51,13 @@ const Navigation = () => {
 
       {/* Content */}
       <div className="w-full">
-        {currentView === 'dashboard' ? <ProductionDashboard /> : <ProjectDocumentation />}
+        {currentView === 'dashboard' ? (
+          <ProductionDashboard />
+        ) : currentView === 'hierarchical' ? (
+          <HierarchicalMonitor />
+        ) : (
+          <ProjectDocumentation />
+        )}
       </div>
     </div>
   );
