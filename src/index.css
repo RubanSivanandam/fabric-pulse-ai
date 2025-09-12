@@ -6,54 +6,68 @@
 
 @layer base {
   :root {
-    /* Industrial Dark Theme */
-    --background: 222 15% 7%;
+    /* Dynamic Industrial Theme - Vibrant & Professional */
+    --background: 220 25% 6%;
     --foreground: 0 0% 98%;
 
-    --card: 222 20% 9%;
+    --card: 220 30% 8%;
     --card-foreground: 0 0% 95%;
 
-    --popover: 222 20% 9%;
+    --popover: 220 30% 8%;
     --popover-foreground: 0 0% 95%;
 
-    /* Industrial Blue Primary */
-    --primary: 214 85% 58%;
+    /* Vibrant Electric Blue Primary */
+    --primary: 214 100% 65%;
     --primary-foreground: 0 0% 98%;
+    --primary-glow: 214 100% 75%;
 
-    --secondary: 222 15% 15%;
-    --secondary-foreground: 0 0% 90%;
+    /* Rich Secondary Colors */
+    --secondary: 280 70% 50%;
+    --secondary-foreground: 0 0% 98%;
 
-    --muted: 222 15% 12%;
-    --muted-foreground: 0 0% 65%;
+    --muted: 220 25% 10%;
+    --muted-foreground: 0 0% 70%;
 
-    --accent: 142 76% 36%;
-    --accent-foreground: 0 0% 98%;
+    /* Vibrant Accent - Neon Green */
+    --accent: 120 100% 50%;
+    --accent-foreground: 220 25% 6%;
 
-    --destructive: 0 84% 60%;
+    --destructive: 0 100% 65%;
     --destructive-foreground: 0 0% 98%;
 
-    --border: 222 15% 20%;
-    --input: 222 15% 15%;
-    --ring: 214 85% 58%;
+    --border: 220 30% 18%;
+    --input: 220 30% 12%;
+    --ring: 214 100% 65%;
 
-    /* Warning and Success Colors */
-    --warning: 38 92% 50%;
-    --warning-foreground: 222 15% 7%;
-    --success: 142 76% 36%;
+    /* Enhanced Status Colors */
+    --warning: 45 100% 60%;
+    --warning-foreground: 220 25% 6%;
+    --success: 120 100% 45%;
     --success-foreground: 0 0% 98%;
+    --info: 200 100% 60%;
+    --info-foreground: 0 0% 98%;
 
-    /* Industrial Gradients */
-    --gradient-primary: linear-gradient(135deg, hsl(214, 85%, 58%), hsl(214, 85%, 48%));
-    --gradient-success: linear-gradient(135deg, hsl(142, 76%, 36%), hsl(142, 76%, 26%));
-    --gradient-warning: linear-gradient(135deg, hsl(38, 92%, 50%), hsl(38, 92%, 40%));
-    --gradient-danger: linear-gradient(135deg, hsl(0, 84%, 60%), hsl(0, 84%, 50%));
+    /* Dynamic Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(214, 100%, 65%), hsl(280, 70%, 50%));
+    --gradient-success: linear-gradient(135deg, hsl(120, 100%, 45%), hsl(140, 80%, 40%));
+    --gradient-warning: linear-gradient(135deg, hsl(45, 100%, 60%), hsl(35, 100%, 55%));
+    --gradient-danger: linear-gradient(135deg, hsl(0, 100%, 65%), hsl(320, 100%, 60%));
+    --gradient-neon: linear-gradient(135deg, hsl(120, 100%, 50%), hsl(200, 100%, 60%));
+    --gradient-cyber: linear-gradient(135deg, hsl(280, 70%, 50%), hsl(214, 100%, 65%));
 
-    /* Shadows for Industrial Feel */
-    --shadow-glow: 0 0 20px hsl(214, 85%, 58%, 0.3);
-    --shadow-card: 0 4px 12px hsl(0, 0%, 0%, 0.4);
-    --shadow-alert: 0 0 15px hsl(0, 84%, 60%, 0.4);
+    /* Enhanced Shadows & Effects */
+    --shadow-glow: 0 0 30px hsl(214, 100%, 65%, 0.5);
+    --shadow-card: 0 8px 32px hsl(0, 0%, 0%, 0.6);
+    --shadow-alert: 0 0 20px hsl(0, 100%, 65%, 0.6);
+    --shadow-success: 0 0 20px hsl(120, 100%, 45%, 0.4);
+    --shadow-neon: 0 0 40px hsl(120, 100%, 50%, 0.3);
 
-    --radius: 0.75rem;
+    /* Animation & Transition Variables */
+    --animation-speed: 0.3s;
+    --animation-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+    --animation-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+
+    --radius: 1rem;
 
     --sidebar-background: 0 0% 98%;
 
@@ -117,6 +131,78 @@
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground overflow-x-hidden;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  /* Smooth scrolling */
+  html {
+    scroll-behavior: smooth;
+  }
+
+  /* Professional Loading Animation */
+  .loading-pulse {
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  /* Glow effects for dynamic elements */
+  .glow-effect {
+    filter: drop-shadow(var(--shadow-glow));
+    transition: filter var(--animation-speed) var(--animation-smooth);
+  }
+
+  .glow-effect:hover {
+    filter: drop-shadow(0 0 40px hsl(214, 100%, 65%, 0.7));
+  }
+
+  /* Professional glassmorphism */
+  .glass-card {
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  /* Enhanced animations */
+  .fade-in-up {
+    animation: fadeInUp 0.6s var(--animation-bounce) both;
+  }
+
+  .fade-in-scale {
+    animation: fadeInScale 0.5s var(--animation-smooth) both;
+  }
+
+  @keyframes fadeInUp {
+    from {
+      opacity: 0;
+      transform: translateY(30px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes fadeInScale {
+    from {
+      opacity: 0;
+      transform: scale(0.9);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  /* Responsive typography */
+  @media (max-width: 640px) {
+    body {
+      font-size: 14px;
+    }
+  }
+
+  @media (min-width: 1920px) {
+    body {
+      font-size: 18px;
+    }
   }
 }
