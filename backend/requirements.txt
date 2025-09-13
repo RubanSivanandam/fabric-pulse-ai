@@ -1,12 +1,12 @@
-# Production Monitoring AI Service - Requirements
+# Fabric Pulse AI - Real Time Monitoring System
 # All packages are free and open source
 
 # Web Framework
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 
-# Database
-sqlite3  # Built into Python
+# SQL Server Database
+pyodbc==5.0.1
 
 # HTTP Requests
 requests==2.31.0
@@ -42,10 +42,18 @@ asyncio  # Built into Python
 # Configuration
 pyyaml==6.0.1
 
-# Optional: Advanced AI/ML (if needed later)
-# scikit-learn==1.3.2
-# matplotlib==3.8.2
-# seaborn==0.13.0
+# AI Integration - Llama 3.2b
+transformers==4.35.2
+torch==2.1.0
+accelerate==0.24.1
+
+# Advanced AI/ML
+scikit-learn==1.3.2
+matplotlib==3.8.2
+seaborn==0.13.0
+
+# Windows Service
+pywin32==306
 
 # Development Tools (Optional)
 # pytest==7.4.3

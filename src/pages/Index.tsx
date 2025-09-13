@@ -1,7 +1,11 @@
-import Navigation from '@/components/Navigation';
+import FabricPulseDashboard from '@/components/FabricPulseDashboard';
 
 const Index = () => {
-  return <Navigation />;
+  return (
+    <main className="min-h-screen bg-background">
+      <FabricPulseDashboard />
+    </main>
+  );
 };
 
 export default Index;
