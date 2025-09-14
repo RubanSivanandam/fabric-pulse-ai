@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { 
   Activity, AlertTriangle, Users, Target, TrendingUp, TrendingDown, 
-  MessageSquare, Factory, Filter, Cpu, BarChart3, Database 
+  MessageSquare, Factory, Filter, Cpu, BarChart3, Database, Loader2 
 } from 'lucide-react';
 import { Bar } from 'react-chartjs-2';
 import {
@@ -35,126 +35,122 @@ ChartJS.register(
   BarElement
 );
 
-// Types for RTMS data structure
-interface RTMSEmployee {
-  name: string;
-  code: string;
+// API Configuration
+const API_BASE_URL = 'http://localhost:8000';
+
+// Types for API responses
+interface UnderperformerData {
+  emp_name: string;
+  emp_code: string;
+  line_name: string;
+  unit_code: string;
+  floor_name: string;
+  operation: string;
+  new_oper_seq: string;
+  efficiency: number;
   production: number;
   target: number;
-  efficiency: number;
-  operation: string;
-  used_min: number;
-  is_underperformer: boolean;
+  performance_gap?: number;
+  alert_priority?: string;
 }
 
-interface RTMSDevice {
-  name: string;
-  employees: Record<string, RTMSEmployee>;
-  total_production: number;
-  total_target: number;
-  efficiency: number;
+interface AIInsights {
+  summary: string;
+  performance_analysis: {
+    best_performing_line?: [string, number];
+    worst_performing_line?: [string, number];
+    best_performing_operation?: [string, number];
+    worst_performing_operation?: [string, number];
+    line_averages: Record<string, number>;
+    operation_averages: Record<string, number>;
+  };
+  recommendations: string[];
+  ai_model_status: string;
 }
 
-interface RTMSOperation {
-  name: string;
-  devices: Record<string, RTMSDevice>;
-  total_production: number;
-  total_target: number;
-  efficiency: number;
-}
-
-interface RTMSPart {
-  name: string;
-  operations: Record<string, RTMSOperation>;
-  total_production: number;
-  total_target: number;
-  efficiency: number;
-}
-
-interface RTMSStyle {
-  name: string;
-  parts: Record<string, RTMSPart>;
-  total_production: number;
-  total_target: number;
-  efficiency: number;
-}
-
-interface RTMSLine {
-  name: string;
-  styles: Record<string, RTMSStyle>;
-  total_production: number;
-  total_target: number;
-  efficiency: number;
-}
-
-interface RTMSFloor {
-  name: string;
-  lines: Record<string, RTMSLine>;
-  total_production: number;
-  total_target: number;
-  efficiency: number;
-}
-
-interface RTMSUnit {
-  name: string;
-  floors: Record<string, RTMSFloor>;
-  total_production: number;
-  total_target: number;
-  efficiency: number;
-}
-
-interface RTMSHierarchy {
-  [unitCode: string]: RTMSUnit;
-}
-
-interface RTMSAnalysis {
+interface AIAnalysis {
   status: string;
   overall_efficiency: number;
   total_production: number;
   total_target: number;
-  underperformers: Array<{
-    emp_name: string;
-    emp_code: string;
-    line_name: string;
-    unit_code: string;
-    floor_name: string;
-    operation: string;
-    new_oper_seq: string;
-    efficiency: number;
-    production: number;
-    target: number;
-  }>;
-  ai_insights: string;
-  timestamp: string;
+  efficiency_data: any[];
+  underperformers: UnderperformerData[];
+  overperformers: any[];
+  performance_categories: Record<string, any[]>;
+  ai_insights: AIInsights;
+  whatsapp_alerts_needed: boolean;
+  analysis_timestamp: string;
+  records_analyzed: number;
 }
 
-interface RTMSAlert {
-  type: string;
-  severity: string;
-  employee: any;
+interface HierarchyUnit {
+  name: string;
+  floors: Record<string, HierarchyFloor>;
+  total_production: number;
+  total_target: number;
+  efficiency: number;
+  employee_count: number;
+  underperformer_count: number;
+}
+
+interface HierarchyFloor {
+  name: string;
+  lines: Record<string, HierarchyLine>;
+  total_production: number;
+  total_target: number;
+  efficiency: number;
+  employee_count: number;
+  underperformer_count: number;
+}
+
+interface HierarchyLine {
+  name: string;
+  styles: Record<string, any>;
+  total_production: number;
+  total_target: number;
+  efficiency: number;
+  employee_count: number;
+  underperformer_count: number;
+}
+
+interface AlertData {
+  id: string;
+  employee: string;
+  employee_code: string;
+  unit: string;
+  floor: string;
+  line: string;
+  operation: string;
+  current_efficiency: number;
+  target_efficiency: number;
+  gap: number;
+  priority: string;
+  production: number;
+  target: number;
   message: string;
   timestamp: string;
 }
 
 const FabricPulseDashboard = () => {
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [rtmsData, setRtmsData] = useState<RTMSAnalysis | null>(null);
-  const [hierarchyData, setHierarchyData] = useState<RTMSHierarchy>({});
-  const [alerts, setAlerts] = useState<RTMSAlert[]>([]);
+  const [aiAnalysis, setAiAnalysis] = useState<AIAnalysis | null>(null);
+  const [hierarchyData, setHierarchyData] = useState<Record<string, HierarchyUnit>>({});
+  const [alerts, setAlerts] = useState<AlertData[]>([]);
+  const [recentNotifications, setRecentNotifications] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   
   // Filter states for hierarchy navigation
   const [selectedUnit, setSelectedUnit] = useState<string>('');
   const [selectedFloor, setSelectedFloor] = useState<string>('');
   const [selectedLine, setSelectedLine] = useState<string>('');
-  const [selectedStyle, setSelectedStyle] = useState<string>('');
   
   const headerRef = useRef<HTMLDivElement>(null);
   const dashboardRef = useRef<HTMLDivElement>(null);
 
   // GSAP Animation setup
   useEffect(() => {
-    if (headerRef.current && dashboardRef.current) {
+    if (headerRef.current && dashboardRef.current && aiAnalysis) {
       gsap.fromTo(
         headerRef.current,
         { opacity: 0, y: -50 },
@@ -175,116 +171,81 @@ const FabricPulseDashboard = () => {
         }
       );
     }
-  }, [rtmsData]);
+  }, [aiAnalysis]);
 
-  // Fetch RTMS data every 10 minutes
-  useEffect(() => {
-    const fetchRTMSData = async () => {
-      try {
-        setLoading(true);
-        
-        // Fetch production analysis
-        const analysisResponse = await fetch('http://localhost:8000/api/rtms/analyze');
-        const analysisData = await analysisResponse.json();
-        
-        if (analysisData.status === 'success') {
-          setRtmsData(analysisData.data.ai_analysis);
-          setHierarchyData(analysisData.data.hierarchy);
-        }
-        
-        // Fetch alerts
-        const alertsResponse = await fetch('http://localhost:8000/api/rtms/alerts');
-        const alertsData = await alertsResponse.json();
-        
-        if (alertsData.status === 'success') {
-          setAlerts(alertsData.alerts);
-        }
-        
-      } catch (error) {
-        console.error('Failed to fetch RTMS data:', error);
-        // Use mock data for development
-        setRtmsData({
-          status: 'success',
-          overall_efficiency: 87.5,
-          total_production: 2156,
-          total_target: 2400,
-          underperformers: [
-            {
-              emp_name: 'Mamma',
-              emp_code: '042747',
-              line_name: 'S1-1',
-              unit_code: 'D15-2',
-              floor_name: 'FLOOR-2',
-              operation: 'Inside Checking',
-              new_oper_seq: 'A10001',
-              efficiency: 67.8,
-              production: 307,
-              target: 453
-            }
-          ],
-          ai_insights: '📈 Good performance overall with 3 operators requiring attention for efficiency improvement.',
-          timestamp: new Date().toISOString()
-        });
-        
-        // Mock hierarchy data with styles
-        setHierarchyData({
-          'D15-2': {
-            name: 'D15-2',
-            floors: {
-              'FLOOR-2': {
-                name: 'FLOOR-2',
-                lines: {
-                  'S1-1': {
-                    name: 'S1-1',
-                    styles: {
-                      '828656-D47665 HO25': {
-                        name: '828656-D47665 HO25',
-                        parts: {},
-                        total_production: 1250,
-                        total_target: 1400,
-                        efficiency: 89.3
-                      }
-                    },
-                    total_production: 1250,
-                    total_target: 1400,
-                    efficiency: 89.3
-                  },
-                  'S2-1': {
-                    name: 'S2-1',
-                    styles: {
-                      '828656-D47665 HO25': {
-                        name: '828656-D47665 HO25',
-                        parts: {},
-                        total_production: 906,
-                        total_target: 1000,
-                        efficiency: 90.6
-                      }
-                    },
-                    total_production: 906,
-                    total_target: 1000,
-                    efficiency: 90.6
-                  }
-                },
-                total_production: 2156,
-                total_target: 2400,
-                efficiency: 89.8
-              }
-            },
-            total_production: 2156,
-            total_target: 2400,
-            efficiency: 89.8
-          }
-        });
-      } finally {
-        setLoading(false);
+  // API Functions
+  const fetchAnalysisData = async (): Promise<{ aiAnalysis: AIAnalysis; hierarchy: Record<string, HierarchyUnit> } | null> => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/rtms/analyze`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
-    };
+      const data = await response.json();
+      
+      if (data.status === 'success') {
+        return {
+          aiAnalysis: data.data.ai_analysis,
+          hierarchy: data.data.hierarchy
+        };
+      } else {
+        throw new Error(data.message || 'Failed to fetch analysis data');
+      }
+    } catch (error) {
+      console.error('Error fetching analysis data:', error);
+      throw error;
+    }
+  };
 
+  const fetchAlertsData = async (): Promise<AlertData[]> => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/rtms/alerts`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      return data.alerts || [];
+    } catch (error) {
+      console.error('Error fetching alerts data:', error);
+      return [];
+    }
+  };
+
+  // Main data fetching function
+  const fetchAllData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      console.log('Fetching data from backend...');
+      
+      // Fetch analysis data
+      const analysisResult = await fetchAnalysisData();
+      if (analysisResult) {
+        setAiAnalysis(analysisResult.aiAnalysis);
+        setHierarchyData(analysisResult.hierarchy);
+        console.log('Analysis data loaded:', analysisResult.aiAnalysis);
+      }
+
+      // Fetch alerts data
+      const alertsData = await fetchAlertsData();
+      setAlerts(alertsData);
+      console.log('Alerts data loaded:', alertsData);
+
+    } catch (error) {
+      console.error('Failed to fetch data:', error);
+      setError(error instanceof Error ? error.message : 'Failed to fetch data from backend');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Initial data fetch and periodic updates
+  useEffect(() => {
     // Initial fetch
-    fetchRTMSData();
+    fetchAllData();
     
-    // Set up timer for real-time updates every 10 minutes
-    const timer = setInterval(fetchRTMSData, 10 * 60 * 1000);
+    // Set up periodic updates every 10 minutes
+    const timer = setInterval(fetchAllData, 10 * 60 * 1000);
     
     // Update time display every second
     const timeTimer = setInterval(() => {
@@ -297,35 +258,15 @@ const FabricPulseDashboard = () => {
     };
   }, []);
 
-  // Get filtered data based on current selection
-  const getFilteredData = () => {
-    if (!selectedUnit || !hierarchyData[selectedUnit]) return null;
-    
-    const unit = hierarchyData[selectedUnit];
-    if (!selectedFloor || !unit.floors[selectedFloor]) return unit;
-    
-    const floor = unit.floors[selectedFloor];
-    if (!selectedLine || !floor.lines[selectedLine]) return floor;
-    
-    return floor.lines[selectedLine];
-  };
-
-  // Generate bar chart data for employee efficiency with red bars for underperformers
+  // Generate bar chart data for employee efficiency
   const getEmployeeEfficiencyBarData = () => {
-    if (!rtmsData || !rtmsData.underperformers) return null;
+    if (!aiAnalysis?.underperformers || aiAnalysis.underperformers.length === 0) {
+      return null;
+    }
     
-    // Get all employees from underperformers plus some high performers for comparison
-    const employees = rtmsData.underperformers.slice(0, 10); // Show top 10 for visibility
-    
-    // Find the highest performer to set as 100%
-    const maxProduction = Math.max(...employees.map(emp => emp.production));
-    
+    const employees = aiAnalysis.underperformers.slice(0, 10);
     const labels = employees.map(emp => emp.emp_name);
-    const efficiencyData = employees.map(emp => {
-      // Calculate normalized efficiency (highest producer = 100%)
-      const normalizedEff = maxProduction > 0 ? (emp.production / maxProduction) * 100 : emp.efficiency;
-      return Math.min(normalizedEff, emp.efficiency); // Use actual efficiency if lower
-    });
+    const efficiencyData = employees.map(emp => emp.efficiency);
     
     const backgroundColors = efficiencyData.map(eff => 
       eff < 85 ? 'hsl(0, 84%, 60%)' : 'hsl(142, 71%, 45%)'
@@ -356,6 +297,8 @@ const FabricPulseDashboard = () => {
     if (!hierarchyData || !selectedUnit) return null;
     
     const unit = hierarchyData[selectedUnit];
+    if (!unit) return null;
+    
     if (!selectedFloor) {
       // Show floor distribution
       const floors = Object.values(unit.floors);
@@ -378,7 +321,7 @@ const FabricPulseDashboard = () => {
     }
     
     const floor = unit.floors[selectedFloor];
-    if (!selectedLine) {
+    if (!floor || !selectedLine) {
       // Show line distribution
       const lines = Object.values(floor.lines);
       return {
@@ -402,16 +345,17 @@ const FabricPulseDashboard = () => {
     return null;
   };
 
-  const sendWhatsAppAlert = () => {
+  const sendWhatsAppAlert = async () => {
     // Simulate WhatsApp notification for underperformers
-    const newAlert: RTMSAlert = {
+    const newAlert = {
+      id: Date.now().toString(),
       type: 'whatsapp',
       severity: 'medium',
       employee: null,
       message: 'WhatsApp alerts sent to supervisors for all underperforming employees',
       timestamp: new Date().toISOString()
     };
-    setAlerts(prev => [newAlert, ...prev.slice(0, 4)]);
+    setRecentNotifications(prev => [newAlert, ...prev.slice(0, 4)]);
   };
 
   const chartOptions = {
@@ -498,14 +442,65 @@ const FabricPulseDashboard = () => {
     }
   };
 
+  // Loading state
   if (loading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center space-y-4">
-          <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-primary mx-auto"></div>
+          <div className="flex items-center justify-center">
+            <Loader2 className="h-16 w-16 animate-spin text-primary" />
+          </div>
           <p className="text-xl text-primary">Loading Fabric Pulse AI...</p>
           <p className="text-sm text-muted-foreground">Connecting to RTMS database</p>
         </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <Card className="max-w-md">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="h-5 w-5" />
+              Connection Error
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">{error}</p>
+            <Button onClick={fetchAllData} className="w-full">
+              <Database className="h-4 w-4 mr-2" />
+              Retry Connection
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // No data state
+  if (!aiAnalysis) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <Card className="max-w-md">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Database className="h-5 w-5 text-muted-foreground" />
+              No Data Available
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              No production data available from the database. Please check if the backend service is running and data exists.
+            </p>
+            <Button onClick={fetchAllData} className="w-full">
+              <Database className="h-4 w-4 mr-2" />
+              Refresh Data
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -542,7 +537,7 @@ const FabricPulseDashboard = () => {
             </h1>
             <p className="text-xs sm:text-sm lg:text-base text-muted-foreground flex items-center gap-2">
               <Database className="h-4 w-4" />
-              Real-Time Monitoring System • Llama 3.2b AI
+              Real-Time Monitoring System • Live Data
             </p>
           </div>
         </div>
@@ -557,13 +552,22 @@ const FabricPulseDashboard = () => {
             <p className="text-lg font-mono font-semibold text-primary">
               {currentTime.toLocaleTimeString()}
             </p>
-            <p className="text-xs text-success">● Live Monitoring</p>
+            <p className="text-xs text-success">● Live Data</p>
           </motion.div>
+          <Button 
+            onClick={fetchAllData}
+            variant="outline"
+            size="sm"
+            className="border-primary text-primary hover:bg-primary hover:text-primary-foreground"
+          >
+            <Database className="h-4 w-4 mr-2" />
+            Refresh Data
+          </Button>
         </div>
       </motion.div>
 
       {/* AI Insights Alert */}
-      {rtmsData?.ai_insights && (
+      {aiAnalysis?.ai_insights && (
         <motion.div
           initial={{ opacity: 0, scale: 0.9, y: -20 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -574,9 +578,14 @@ const FabricPulseDashboard = () => {
             <AlertDescription className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-2">
               <div className="space-y-1">
                 <p className="font-semibold text-primary">AI Analysis Insights</p>
-                <p className="text-sm">{rtmsData.ai_insights}</p>
+                <p className="text-sm">{aiAnalysis.ai_insights.summary}</p>
+                {aiAnalysis.ai_insights.recommendations.length > 0 && (
+                  <div className="text-xs text-muted-foreground">
+                    <strong>Recommendations:</strong> {aiAnalysis.ai_insights.recommendations.slice(0, 2).join(', ')}
+                  </div>
+                )}
               </div>
-              {alerts.filter(a => a.type !== 'whatsapp').length > 0 && (
+              {(alerts.length > 0 || aiAnalysis.underperformers.length > 0) && (
                 <Button 
                   variant="outline" 
                   size="sm" 
@@ -658,24 +667,13 @@ const FabricPulseDashboard = () => {
         </div>
         
         <div className="space-y-2">
-          <label className="text-sm font-medium">Style No</label>
-          <Select 
-            value={selectedStyle} 
-            onValueChange={setSelectedStyle}
-            disabled={!selectedLine}
-          >
-            <SelectTrigger className="bg-background/80">
-              <SelectValue placeholder="Select Style" />
-            </SelectTrigger>
-            <SelectContent>
-              {selectedUnit && selectedFloor && selectedLine && 
-                hierarchyData[selectedUnit]?.floors[selectedFloor]?.lines[selectedLine] &&
-                Object.keys(hierarchyData[selectedUnit].floors[selectedFloor].lines[selectedLine].styles).map(style => (
-                  <SelectItem key={style} value={style}>{style}</SelectItem>
-                ))
-              }
-            </SelectContent>
-          </Select>
+          <label className="text-sm font-medium">Data Status</label>
+          <div className="bg-background/80 rounded-md p-2 text-sm">
+            <div className="text-success">● {aiAnalysis.records_analyzed} records</div>
+            <div className="text-xs text-muted-foreground">
+              {new Date(aiAnalysis.analysis_timestamp).toLocaleTimeString()}
+            </div>
+          </div>
         </div>
       </motion.div>
 
@@ -696,7 +694,7 @@ const FabricPulseDashboard = () => {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-primary">
-                  {rtmsData?.total_production?.toLocaleString() || '0'}
+                  {aiAnalysis.total_production?.toLocaleString() || '0'}
                 </div>
                 <p className="text-xs text-muted-foreground">pieces produced today</p>
               </CardContent>
@@ -717,7 +715,7 @@ const FabricPulseDashboard = () => {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-warning">
-                  {rtmsData?.total_target?.toLocaleString() || '0'}
+                  {aiAnalysis.total_target?.toLocaleString() || '0'}
                 </div>
                 <p className="text-xs text-muted-foreground">daily target pieces</p>
               </CardContent>
@@ -729,10 +727,10 @@ const FabricPulseDashboard = () => {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.3 }}
           >
-            <Card className={`shadow-card glass-card border-${rtmsData && rtmsData.overall_efficiency >= 90 ? 'success' : rtmsData && rtmsData.overall_efficiency >= 85 ? 'warning' : 'destructive'}/20 hover:shadow-glow transition-all duration-300`}>
+            <Card className={`shadow-card glass-card border-${aiAnalysis.overall_efficiency >= 90 ? 'success' : aiAnalysis.overall_efficiency >= 85 ? 'warning' : 'destructive'}/20 hover:shadow-glow transition-all duration-300`}>
               <CardHeader className="pb-2">
                 <CardTitle className="flex items-center gap-2 text-sm">
-                  {rtmsData && rtmsData.overall_efficiency >= 85 ? (
+                  {aiAnalysis.overall_efficiency >= 85 ? (
                     <TrendingUp className="h-4 w-4 text-success" />
                   ) : (
                     <TrendingDown className="h-4 w-4 text-destructive" />
@@ -741,8 +739,8 @@ const FabricPulseDashboard = () => {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className={`text-2xl font-bold ${rtmsData && rtmsData.overall_efficiency >= 90 ? 'text-success' : rtmsData && rtmsData.overall_efficiency >= 85 ? 'text-warning' : 'text-destructive'}`}>
-                  {rtmsData?.overall_efficiency?.toFixed(1) || '0'}%
+                <div className={`text-2xl font-bold ${aiAnalysis.overall_efficiency >= 90 ? 'text-success' : aiAnalysis.overall_efficiency >= 85 ? 'text-warning' : 'text-destructive'}`}>
+                  {aiAnalysis.overall_efficiency?.toFixed(1) || '0'}%
                 </div>
                 <p className="text-xs text-muted-foreground">overall efficiency</p>
               </CardContent>
@@ -763,7 +761,7 @@ const FabricPulseDashboard = () => {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-destructive">
-                  {rtmsData?.underperformers?.length || '0'}
+                  {aiAnalysis.underperformers?.length || '0'}
                 </div>
                 <p className="text-xs text-muted-foreground">below 85% efficiency</p>
               </CardContent>
@@ -835,7 +833,7 @@ const FabricPulseDashboard = () => {
         </div>
 
         {/* Underperformers List */}
-        {rtmsData && rtmsData.underperformers && rtmsData.underperformers.length > 0 && (
+        {aiAnalysis && aiAnalysis.underperformers && aiAnalysis.underperformers.length > 0 && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -851,7 +849,7 @@ const FabricPulseDashboard = () => {
               </CardHeader>
               <CardContent>
                 <div className="grid gap-4">
-                  {rtmsData.underperformers.map((emp, index) => (
+                  {aiAnalysis.underperformers.map((emp, index) => (
                     <motion.div
                       key={`${emp.emp_code}-${index}`}
                       className="flex flex-col lg:flex-row items-start lg:items-center justify-between p-4 border border-destructive/20 rounded-lg bg-destructive/5 backdrop-blur-sm gap-4"
@@ -868,11 +866,19 @@ const FabricPulseDashboard = () => {
                           <Badge variant="outline" className="text-xs">
                             {emp.efficiency}% efficiency
                           </Badge>
+                          {emp.alert_priority && (
+                            <Badge variant={emp.alert_priority === 'HIGH' ? 'destructive' : 'secondary'} className="text-xs">
+                              {emp.alert_priority}
+                            </Badge>
+                          )}
                         </div>
                         <div className="text-sm text-muted-foreground space-y-1">
                           <p><strong>Location:</strong> {emp.unit_code} → {emp.floor_name} → {emp.line_name}</p>
                           <p><strong>Operation:</strong> {emp.operation} ({emp.new_oper_seq})</p>
                           <p><strong>Production:</strong> {emp.production}/{emp.target} pieces</p>
+                          {emp.performance_gap && (
+                            <p><strong>Performance Gap:</strong> {emp.performance_gap.toFixed(1)}% below target</p>
+                          )}
                         </div>
                       </div>
                       <Button 
@@ -880,15 +886,15 @@ const FabricPulseDashboard = () => {
                         size="sm"
                         className="shrink-0"
                         onClick={() => {
-                          // Individual WhatsApp alert
-                          const alert: RTMSAlert = {
+                          const alert = {
+                            id: Date.now().toString(),
                             type: 'individual_whatsapp',
                             severity: 'high',
                             employee: emp,
                             message: `WhatsApp alert sent for ${emp.emp_name} (${emp.efficiency}% efficiency)`,
                             timestamp: new Date().toISOString()
                           };
-                          setAlerts(prev => [alert, ...prev.slice(0, 4)]);
+                          setRecentNotifications(prev => [alert, ...prev.slice(0, 4)]);
                         }}
                       >
                         <MessageSquare className="h-4 w-4 mr-2" />
@@ -917,7 +923,7 @@ const FabricPulseDashboard = () => {
             </CardHeader>
             <CardContent>
               <div className="space-y-2 max-h-64 overflow-y-auto">
-                {alerts.length === 0 ? (
+                {(recentNotifications.length === 0 && alerts.length === 0) ? (
                   <motion.div 
                     className="text-center py-8 space-y-2"
                     animate={{ opacity: [0.5, 1, 0.5] }}
@@ -927,7 +933,7 @@ const FabricPulseDashboard = () => {
                     <p className="text-muted-foreground">All systems operational - No alerts</p>
                   </motion.div>
                 ) : (
-                  alerts.map((alert, index) => (
+                  [...recentNotifications, ...alerts.slice(0, 5)].map((alert, index) => (
                     <motion.div 
                       key={`${alert.timestamp}-${index}`}
                       className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 border rounded-lg bg-card/50 backdrop-blur-sm gap-2"
@@ -937,13 +943,15 @@ const FabricPulseDashboard = () => {
                     >
                       <div className="flex items-start gap-3 flex-1">
                         <Badge 
-                          variant={alert.severity === 'high' ? 'destructive' : alert.severity === 'medium' ? 'secondary' : 'default'}
+                          variant={alert.priority === 'HIGH' || alert.severity === 'high' ? 'destructive' : alert.priority === 'MEDIUM' || alert.severity === 'medium' ? 'secondary' : 'default'}
                           className="shrink-0 mt-0.5"
                         >
-                          {alert.type}
+                          {alert.type || 'alert'}
                         </Badge>
                         <div className="space-y-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{alert.message}</p>
+                          <p className="text-sm font-medium truncate">
+                            {alert.message || `${alert.employee} - ${alert.current_efficiency}% efficiency`}
+                          </p>
                           <p className="text-xs text-muted-foreground">
                             {new Date(alert.timestamp).toLocaleString()}
                           </p>
