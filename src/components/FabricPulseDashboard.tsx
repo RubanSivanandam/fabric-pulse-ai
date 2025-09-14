@@ -10,7 +10,7 @@ import {
   Activity, AlertTriangle, Users, Target, TrendingUp, TrendingDown, 
   MessageSquare, Factory, Filter, Cpu, BarChart3, Database 
 } from 'lucide-react';
-import { Pie } from 'react-chartjs-2';
+import { Bar } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -20,7 +20,7 @@ import {
   Title,
   Tooltip,
   Legend,
-  ArcElement,
+  BarElement,
 } from 'chart.js';
 
 // Register Chart.js components
@@ -32,7 +32,7 @@ ChartJS.register(
   Title,
   Tooltip,
   Legend,
-  ArcElement
+  BarElement
 );
 
 // Types for RTMS data structure
@@ -226,7 +226,7 @@ const FabricPulseDashboard = () => {
           timestamp: new Date().toISOString()
         });
         
-        // Mock hierarchy data
+        // Mock hierarchy data with styles
         setHierarchyData({
           'D15-2': {
             name: 'D15-2',
@@ -236,14 +236,30 @@ const FabricPulseDashboard = () => {
                 lines: {
                   'S1-1': {
                     name: 'S1-1',
-                    styles: {},
+                    styles: {
+                      '828656-D47665 HO25': {
+                        name: '828656-D47665 HO25',
+                        parts: {},
+                        total_production: 1250,
+                        total_target: 1400,
+                        efficiency: 89.3
+                      }
+                    },
                     total_production: 1250,
                     total_target: 1400,
                     efficiency: 89.3
                   },
                   'S2-1': {
                     name: 'S2-1',
-                    styles: {},
+                    styles: {
+                      '828656-D47665 HO25': {
+                        name: '828656-D47665 HO25',
+                        parts: {},
+                        total_production: 906,
+                        total_target: 1000,
+                        efficiency: 90.6
+                      }
+                    },
                     total_production: 906,
                     total_target: 1000,
                     efficiency: 90.6
@@ -294,42 +310,49 @@ const FabricPulseDashboard = () => {
     return floor.lines[selectedLine];
   };
 
-  // Generate pie chart data for efficiency distribution
-  const getEfficiencyPieData = () => {
-    if (!rtmsData) return null;
+  // Generate bar chart data for employee efficiency with red bars for underperformers
+  const getEmployeeEfficiencyBarData = () => {
+    if (!rtmsData || !rtmsData.underperformers) return null;
     
-    const filteredData = getFilteredData();
-    if (!filteredData) return null;
+    // Get all employees from underperformers plus some high performers for comparison
+    const employees = rtmsData.underperformers.slice(0, 10); // Show top 10 for visibility
     
-    // Calculate efficiency ranges
-    const excellent = filteredData.efficiency >= 95 ? 1 : 0;
-    const good = filteredData.efficiency >= 85 && filteredData.efficiency < 95 ? 1 : 0;
-    const needs_improvement = filteredData.efficiency < 85 ? 1 : 0;
+    // Find the highest performer to set as 100%
+    const maxProduction = Math.max(...employees.map(emp => emp.production));
+    
+    const labels = employees.map(emp => emp.emp_name);
+    const efficiencyData = employees.map(emp => {
+      // Calculate normalized efficiency (highest producer = 100%)
+      const normalizedEff = maxProduction > 0 ? (emp.production / maxProduction) * 100 : emp.efficiency;
+      return Math.min(normalizedEff, emp.efficiency); // Use actual efficiency if lower
+    });
+    
+    const backgroundColors = efficiencyData.map(eff => 
+      eff < 85 ? 'hsl(0, 84%, 60%)' : 'hsl(142, 71%, 45%)'
+    );
+    
+    const borderColors = efficiencyData.map(eff => 
+      eff < 85 ? 'hsl(0, 84%, 70%)' : 'hsl(142, 71%, 55%)'
+    );
     
     return {
-      labels: ['Excellent (95%+)', 'Good (85-94%)', 'Needs Improvement (<85%)'],
+      labels,
       datasets: [
         {
-          data: [excellent, good, needs_improvement],
-          backgroundColor: [
-            'hsl(142, 71%, 45%)', // Success green
-            'hsl(45, 93%, 47%)',   // Warning yellow  
-            'hsl(0, 84%, 60%)'     // Destructive red
-          ],
-          borderColor: [
-            'hsl(142, 71%, 55%)',
-            'hsl(45, 93%, 57%)',
-            'hsl(0, 84%, 70%)'
-          ],
+          label: 'Efficiency %',
+          data: efficiencyData,
+          backgroundColor: backgroundColors,
+          borderColor: borderColors,
           borderWidth: 2,
-          hoverOffset: 8
+          borderRadius: 6,
+          borderSkipped: false,
         }
       ]
     };
   };
 
-  // Generate production distribution pie chart
-  const getProductionPieData = () => {
+  // Generate production distribution bar chart
+  const getProductionBarData = () => {
     if (!hierarchyData || !selectedUnit) return null;
     
     const unit = hierarchyData[selectedUnit];
@@ -339,11 +362,17 @@ const FabricPulseDashboard = () => {
       return {
         labels: floors.map(floor => floor.name),
         datasets: [{
+          label: 'Production (Pieces)',
           data: floors.map(floor => floor.total_production),
-          backgroundColor: floors.map((_, i) => `hsl(${210 + i * 30}, 70%, 55%)`),
-          borderColor: floors.map((_, i) => `hsl(${210 + i * 30}, 70%, 65%)`),
+          backgroundColor: floors.map(floor => 
+            floor.efficiency < 85 ? 'hsl(0, 84%, 60%)' : 'hsl(142, 71%, 45%)'
+          ),
+          borderColor: floors.map(floor => 
+            floor.efficiency < 85 ? 'hsl(0, 84%, 70%)' : 'hsl(142, 71%, 55%)'
+          ),
           borderWidth: 2,
-          hoverOffset: 8
+          borderRadius: 6,
+          borderSkipped: false,
         }]
       };
     }
@@ -355,11 +384,17 @@ const FabricPulseDashboard = () => {
       return {
         labels: lines.map(line => line.name),
         datasets: [{
+          label: 'Production (Pieces)',
           data: lines.map(line => line.total_production),
-          backgroundColor: lines.map((_, i) => `hsl(${210 + i * 40}, 70%, 55%)`),
-          borderColor: lines.map((_, i) => `hsl(${210 + i * 40}, 70%, 65%)`),
+          backgroundColor: lines.map(line => 
+            line.efficiency < 85 ? 'hsl(0, 84%, 60%)' : 'hsl(142, 71%, 45%)'
+          ),
+          borderColor: lines.map(line => 
+            line.efficiency < 85 ? 'hsl(0, 84%, 70%)' : 'hsl(142, 71%, 55%)'
+          ),
           borderWidth: 2,
-          hoverOffset: 8
+          borderRadius: 6,
+          borderSkipped: false,
         }]
       };
     }
@@ -382,15 +417,27 @@ const FabricPulseDashboard = () => {
   const chartOptions = {
     responsive: true,
     maintainAspectRatio: false,
+    animation: {
+      duration: 2000,
+      easing: 'easeInOutQuart' as const,
+      delay: (context: any) => {
+        return context.type === 'data' && context.mode === 'default'
+          ? context.dataIndex * 100
+          : 0;
+      },
+    },
     plugins: {
       legend: {
-        position: 'bottom' as const,
+        position: 'top' as const,
         labels: {
           color: 'hsl(213, 27%, 84%)',
           padding: 20,
           font: {
-            size: 12
-          }
+            size: 12,
+            weight: 500
+          },
+          usePointStyle: true,
+          pointStyle: 'rectRounded',
         }
       },
       tooltip: {
@@ -398,8 +445,56 @@ const FabricPulseDashboard = () => {
         titleColor: 'hsl(213, 27%, 94%)',
         bodyColor: 'hsl(213, 27%, 84%)',
         borderColor: 'hsl(211, 96%, 48%)',
-        borderWidth: 1
+        borderWidth: 1,
+        cornerRadius: 8,
+        displayColors: true,
+        callbacks: {
+          label: (context: any) => {
+            const value = context.formattedValue;
+            const label = context.dataset.label;
+            return `${label}: ${value}${label.includes('Efficiency') ? '%' : ' pieces'}`;
+          }
+        }
       }
+    },
+    scales: {
+      x: {
+        grid: {
+          color: 'hsl(220, 30%, 18%)',
+          lineWidth: 1,
+        },
+        ticks: {
+          color: 'hsl(0, 0%, 70%)',
+          font: {
+            size: 11,
+            weight: 400
+          },
+          maxRotation: 45,
+        },
+        border: {
+          color: 'hsl(220, 30%, 18%)'
+        }
+      },
+      y: {
+        grid: {
+          color: 'hsl(220, 30%, 18%)',
+          lineWidth: 1,
+        },
+        ticks: {
+          color: 'hsl(0, 0%, 70%)',
+          font: {
+            size: 12,
+            weight: 400
+          }
+        },
+        border: {
+          color: 'hsl(220, 30%, 18%)'
+        }
+      }
+    },
+    interaction: {
+      intersect: false,
+      mode: 'index' as const
     }
   };
 
@@ -678,7 +773,7 @@ const FabricPulseDashboard = () => {
 
         {/* Charts Section */}
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 lg:gap-6">
-          {/* Efficiency Distribution Pie Chart */}
+          {/* Employee Efficiency Bar Chart */}
           <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -688,19 +783,19 @@ const FabricPulseDashboard = () => {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-primary">
                   <BarChart3 className="h-5 w-5" />
-                  Efficiency Distribution (Real-time)
+                  Employee Efficiency (Real-time)
                 </CardTitle>
                 <p className="text-sm text-muted-foreground">
-                  {selectedUnit ? `${selectedUnit}${selectedFloor ? ` > ${selectedFloor}` : ''}${selectedLine ? ` > ${selectedLine}` : ''}` : 'All Units'}
+                  Red bars indicate below 85% efficiency threshold
                 </p>
               </CardHeader>
               <CardContent>
                 <div className="h-80">
-                  {getEfficiencyPieData() ? (
-                    <Pie data={getEfficiencyPieData()!} options={chartOptions} />
+                  {getEmployeeEfficiencyBarData() ? (
+                    <Bar data={getEmployeeEfficiencyBarData()!} options={chartOptions} />
                   ) : (
                     <div className="flex items-center justify-center h-full text-muted-foreground">
-                      Select unit and filters to view efficiency distribution
+                      No efficiency data available
                     </div>
                   )}
                 </div>
@@ -708,7 +803,7 @@ const FabricPulseDashboard = () => {
             </Card>
           </motion.div>
 
-          {/* Production Distribution Pie Chart */}
+          {/* Production Distribution Bar Chart */}
           <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -726,8 +821,8 @@ const FabricPulseDashboard = () => {
               </CardHeader>
               <CardContent>
                 <div className="h-80">
-                  {getProductionPieData() ? (
-                    <Pie data={getProductionPieData()!} options={chartOptions} />
+                  {getProductionBarData() ? (
+                    <Bar data={getProductionBarData()!} options={chartOptions} />
                   ) : (
                     <div className="flex items-center justify-center h-full text-muted-foreground">
                       Select unit to view production distribution
