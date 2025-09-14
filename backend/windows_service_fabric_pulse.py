@@ -78,7 +78,7 @@ class FabricPulseAIService(win32serviceutil.ServiceFramework):
         self.logger.info("Starting Fabric Pulse AI backend server...")
         
         # Path to the main application
-        app_path = Path(__file__).parent / "fabric_pulse_ai_main.py"
+        app_path = Path(__file__).parent / "main.py"
         
         # Start FastAPI server as subprocess
         try:
@@ -130,7 +130,7 @@ class FabricPulseAIService(win32serviceutil.ServiceFramework):
             if hasattr(self, 'process'):
                 self.process.terminate()
                 
-            app_path = Path(__file__).parent / "fabric_pulse_ai_main.py"
+            app_path = Path(__file__).parent / "main.py"
             cmd = [sys.executable, str(app_path)]
             
             self.process = subprocess.Popen(
