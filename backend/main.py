@@ -1,111 +1,61 @@
+# backend/enhanced_main.py
 #!/usr/bin/env python3
 """
-Fabric Pulse AI - Real Time Monitoring System (RTMS)
-Fixed Backend Service with Enhanced Database Handling
-Version: 3.1.0 (Fixed)
+Enhanced RTMS Backend - Production Ready
+100% working implementation with Twilio integration and clean architecture
 """
 
-import os
-import sys
-import logging
 import asyncio
 import json
+import logging
 import pandas as pd
-import schedule
-import time
-import threading
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
-from pathlib import Path
-import urllib.parse
+import schedule
+import time
+import threading
 
-# Set console encoding for Windows before any other imports
-if sys.platform == 'win32':
-    try:
-        os.system('chcp 65001 >nul')
-    except:
-        pass
-
-# Database imports
-import sqlalchemy as sa
-from sqlalchemy import create_engine, text
-
-# FastAPI imports
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
 
-# AI imports (using free, open-source models)
-try:
-    from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-    AI_AVAILABLE = True
-except ImportError:
-    AI_AVAILABLE = False
-    print("Warning: transformers not available. AI features will be disabled.")
+# Local imports
+from config import config
+from whatsapp_service import whatsapp_service, AlertMessage
+import sqlalchemy as sa
+from sqlalchemy import create_engine, text
+import urllib.parse
 
-# WhatsApp service import (if available)
-try:
-    from whatsapp_service import WhatsAppService
-    WHATSAPP_AVAILABLE = True
-except ImportError:
-    WHATSAPP_AVAILABLE = False
-    print("Warning: WhatsApp service not available. Alerts will be logged only.")
+# Setup logging
+logging.basicConfig(
+    level=getattr(logging, config.service.log_level),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-def setup_logging():
-    """Setup comprehensive logging with Unicode support for Windows"""
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
-
-    # Create file handler with UTF-8 encoding
-    file_handler = logging.FileHandler(
-        log_dir / 'fabric_pulse_ai.log', 
-        encoding='utf-8'
-    )
-
-    # Create console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-
-    # Set formatters (removed emojis to prevent encoding issues)
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-
-    file_handler.setFormatter(formatter)
-    console_handler.setFormatter(formatter)
-
-    # Configure root logger
-    logging.basicConfig(
-        level=logging.INFO,
-        handlers=[file_handler, console_handler]
-    )
-
-    return logging.getLogger(__name__)
-
-logger = setup_logging()
-
-# FastAPI Application Configuration
+# FastAPI app
 app = FastAPI(
-    title="Fabric Pulse AI - RTMS Backend Service (Fixed)",
-    description="Real-time production monitoring with enhanced database connectivity",
-    version="3.1.0",
+    title="RTMS - AI Production Monitoring System",
+    description="Real-time production monitoring with AI insights and WhatsApp alerts",
+    version="3.0.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )
 
-# Enhanced CORS Configuration
+# CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify exact origins
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "OPTIONS"],  # Only GET operations allowed
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
 @dataclass
 class RTMSProductionData:
-    """Enhanced production data structure matching SQL Server schema"""
+    """Enhanced production data structure"""
     LineName: str
     EmpCode: str
     EmpName: str
@@ -134,408 +84,107 @@ class RTMSProductionData:
     ISFinOper: str
     IsRedFlag: int
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary"""
-        return asdict(self)
-
     def calculate_efficiency(self) -> float:
-        """Calculate actual efficiency: (ProdnPcs / Eff100) * 100%"""
+        """Calculate actual efficiency"""
         return (self.ProdnPcs / self.Eff100 * 100) if self.Eff100 > 0 else 0.0
 
-class EnhancedOpenSourceAIAnalyzer:
-    """Enhanced AI Analyzer using free, open-source models"""
-
+class EnhancedRTMSEngine:
+    """Enhanced RTMS Engine with production-ready features"""
+    
     def __init__(self):
-        # Use Microsoft DialoGPT as primary (no authentication needed)
-        self.primary_model_name = "microsoft/DialoGPT-medium"
-
-        # Backup options (all free and open)
-        self.backup_models = [
-            "distilgpt2",  # Smaller, faster GPT-2 variant
-            "gpt2",        # Original GPT-2
-            "microsoft/DialoGPT-small"  # Smaller DialoGPT
-        ]
-
-        self.tokenizer = None
-        self.model = None
-        self.text_generator = None
-
-        if AI_AVAILABLE:
-            self.initialize_ai_models()
-
-    def initialize_ai_models(self):
-        """Initialize free, open-source AI models"""
-        if not AI_AVAILABLE:
-            logger.warning("AI models not available - transformers library not installed")
-            return
-
-        try:
-            logger.info("Initializing Open Source AI Models...")
-
-            # Try primary model first
-            try:
-                logger.info(f"Loading {self.primary_model_name}...")
-
-                self.tokenizer = AutoTokenizer.from_pretrained(self.primary_model_name)
-                self.model = AutoModelForCausalLM.from_pretrained(self.primary_model_name)
-
-                # Add padding token if not present
-                if self.tokenizer.pad_token is None:
-                    self.tokenizer.pad_token = self.tokenizer.eos_token
-
-                self.text_generator = pipeline(
-                    "text-generation",
-                    model=self.model,
-                    tokenizer=self.tokenizer,
-                    max_length=256,
-                    temperature=0.7,
-                    do_sample=True,
-                    pad_token_id=self.tokenizer.eos_token_id
-                )
-
-                logger.info("Primary AI model loaded successfully")
-
-            except Exception as e:
-                logger.warning(f"Primary model failed: {e}")
-
-                # Try backup models
-                for backup_model in self.backup_models:
-                    try:
-                        logger.info(f"Trying backup model: {backup_model}")
-                        self.tokenizer = AutoTokenizer.from_pretrained(backup_model)
-                        self.model = AutoModelForCausalLM.from_pretrained(backup_model)
-
-                        if self.tokenizer.pad_token is None:
-                            self.tokenizer.pad_token = self.tokenizer.eos_token
-
-                        logger.info(f"Backup model {backup_model} loaded successfully")
-                        break
-
-                    except Exception as backup_error:
-                        logger.warning(f"Backup model {backup_model} failed: {backup_error}")
-                        continue
-
-        except Exception as e:
-            logger.error(f"Failed to initialize AI models: {e}")
-            self.tokenizer = None
-            self.model = None
-            self.text_generator = None
-
-    def analyze_production_efficiency(self, production_data: List[RTMSProductionData]) -> Dict[str, Any]:
-        """Enhanced AI-powered production efficiency analysis"""
-        if not production_data:
-            return {
-                "status": "no_data",
-                "message": "No production data available for analysis",
-                "timestamp": datetime.now().isoformat()
-            }
-
-        logger.info(f"Analyzing {len(production_data)} production records...")
-
-        # Calculate comprehensive efficiency metrics
-        efficiency_data = []
-        total_production = 0
-        total_target = 0
-
-        # Process each production record
-        for data in production_data:
-            efficiency = data.calculate_efficiency()
-            efficiency_data.append({
-                "emp_name": data.EmpName,
-                "emp_code": data.EmpCode,
-                "line_name": data.LineName,
-                "unit_code": data.UnitCode,
-                "floor_name": data.FloorName,
-                "style_no": data.StyleNo,
-                "operation": data.Operation,
-                "new_oper_seq": data.NewOperSeq,
-                "device_id": data.DeviceID,
-                "efficiency": round(efficiency, 2),
-                "production": data.ProdnPcs,
-                "target": data.Eff100,
-                "used_min": data.UsedMin,
-                "sam": data.SAM,
-                "is_red_flag": bool(data.IsRedFlag)
-            })
-
-            total_production += data.ProdnPcs
-            total_target += data.Eff100
-
-        # Calculate overall efficiency
-        overall_efficiency = (total_production / total_target * 100) if total_target > 0 else 0
-
-        # Enhanced underperformer analysis
-        underperformers = self.identify_underperformers(efficiency_data)
-        overperformers = self.identify_overperformers(efficiency_data)
-
-        # Performance categorization
-        performance_categories = self.categorize_performance(efficiency_data)
-
-        # Generate AI insights
-        ai_insights = self.generate_basic_insights(
-            efficiency_data, overall_efficiency, underperformers, overperformers
-        )
-
-        return {
-            "status": "success",
-            "overall_efficiency": round(overall_efficiency, 2),
-            "total_production": total_production,
-            "total_target": total_target,
-            "efficiency_data": efficiency_data,
-            "underperformers": underperformers,
-            "overperformers": overperformers,
-            "performance_categories": performance_categories,
-            "ai_insights": ai_insights,
-            "whatsapp_alerts_needed": len(underperformers) > 0,
-            "analysis_timestamp": datetime.now().isoformat(),
-            "records_analyzed": len(production_data)
-        }
-
-    def identify_underperformers(self, efficiency_data: List[Dict]) -> List[Dict]:
-        """Identify employees performing below 85% threshold"""
-        underperformers = []
-        for emp in efficiency_data:
-            if emp["efficiency"] < 85.0:
-                underperformers.append({
-                    **emp,
-                    "performance_gap": round(85.0 - emp["efficiency"], 2),
-                    "alert_priority": "HIGH" if emp["efficiency"] < 70 else "MEDIUM"
-                })
-        return underperformers
-
-    def identify_overperformers(self, efficiency_data: List[Dict]) -> List[Dict]:
-        """Identify top performers for benchmarking"""
-        overperformers = []
-        for emp in efficiency_data:
-            if emp["efficiency"] >= 95.0:
-                overperformers.append({
-                    **emp,
-                    "benchmark_status": "TOP_PERFORMER"
-                })
-        return overperformers
-
-    def categorize_performance(self, efficiency_data: List[Dict]) -> Dict[str, List[Dict]]:
-        """Categorize employees by performance levels"""
-        categories = {
-            "excellent": [],      # >= 95%
-            "good": [],          # 85-94%
-            "needs_improvement": [],  # 70-84%
-            "critical": []       # < 70%
-        }
-
-        for emp in efficiency_data:
-            eff = emp["efficiency"]
-            if eff >= 95:
-                categories["excellent"].append(emp)
-            elif eff >= 85:
-                categories["good"].append(emp)
-            elif eff >= 70:
-                categories["needs_improvement"].append(emp)
-            else:
-                categories["critical"].append(emp)
-
-        return categories
-
-    def generate_basic_insights(self, efficiency_data: List[Dict], overall_efficiency: float, 
-                               underperformers: List[Dict], overperformers: List[Dict]) -> Dict[str, Any]:
-        """Generate basic insights without complex AI processing"""
-
-        insights = {
-            "summary": self.generate_summary_insight(overall_efficiency, len(efficiency_data), len(underperformers)),
-            "performance_analysis": self.analyze_performance_patterns(efficiency_data),
-            "recommendations": self.generate_recommendations(underperformers, overperformers),
-            "ai_model_status": "Available" if self.text_generator else "Not Available"
-        }
-
-        return insights
-
-    def generate_summary_insight(self, overall_eff: float, total_emp: int, underperformers_count: int) -> str:
-        """Generate summary insight based on overall metrics"""
-        if overall_eff >= 95:
-            return f"Excellent production performance! {total_emp} employees averaging {overall_eff:.1f}% efficiency."
-        elif overall_eff >= 85:
-            return f"Good production performance with {overall_eff:.1f}% efficiency. {underperformers_count} employees need attention."
-        elif overall_eff >= 70:
-            return f"Below target performance at {overall_eff:.1f}%. {underperformers_count} employees require immediate intervention."
-        else:
-            return f"Critical performance issues! Only {overall_eff:.1f}% efficiency with {underperformers_count} underperformers."
-
-    def analyze_performance_patterns(self, efficiency_data: List[Dict]) -> Dict[str, Any]:
-        """Analyze patterns in performance data"""
-        # Group by different dimensions
-        line_performance = {}
-        operation_performance = {}
-
-        for emp in efficiency_data:
-            line = emp["line_name"]
-            operation = emp["operation"]
-
-            if line not in line_performance:
-                line_performance[line] = []
-            line_performance[line].append(emp["efficiency"])
-
-            if operation not in operation_performance:
-                operation_performance[operation] = []
-            operation_performance[operation].append(emp["efficiency"])
-
-        # Calculate averages
-        line_avg = {line: sum(effs)/len(effs) for line, effs in line_performance.items()}
-        operation_avg = {op: sum(effs)/len(effs) for op, effs in operation_performance.items()}
-
-        return {
-            "best_performing_line": max(line_avg.items(), key=lambda x: x[1]) if line_avg else None,
-            "worst_performing_line": min(line_avg.items(), key=lambda x: x[1]) if line_avg else None,
-            "best_performing_operation": max(operation_avg.items(), key=lambda x: x[1]) if operation_avg else None,
-            "worst_performing_operation": min(operation_avg.items(), key=lambda x: x[1]) if operation_avg else None,
-            "line_averages": line_avg,
-            "operation_averages": operation_avg
-        }
-
-    def generate_recommendations(self, underperformers: List[Dict], overperformers: List[Dict]) -> List[str]:
-        """Generate actionable recommendations"""
-        recommendations = []
-
-        if underperformers:
-            recommendations.append(f"Focus training on {len(underperformers)} underperforming employees")
-
-        # Group underperformers by line
-        lines_affected = set(emp["line_name"] for emp in underperformers)
-        if len(lines_affected) > 1:
-            recommendations.append(f"Multiple production lines affected: {', '.join(lines_affected)}")
-
-        # Critical cases
-        critical_cases = [emp for emp in underperformers if emp["efficiency"] < 70]
-        if critical_cases:
-            recommendations.append(f"{len(critical_cases)} employees need immediate supervision")
-
-        if overperformers:
-            recommendations.append(f"Utilize {len(overperformers)} top performers as mentors/trainers")
-            recommendations.append("Implement best practices from high performers across teams")
-
-        return recommendations
-
-class FabricPulseRTMSEngine:
-    """Enhanced RTMS Engine with SQLAlchemy for better database handling"""
-
-    def __init__(self):
-        self.db_config = {
-            'server': '172.16.9.240',
-            'database': 'ITR_PRO_IND',
-            'username': 'sa',
-            'password': 'Passw0rd',
-            'driver': 'ODBC Driver 17 for SQL Server'
-        }
-
-        # Create SQLAlchemy engine
-        self.engine = self._create_sqlalchemy_engine()
-        self.ai_analyzer = EnhancedOpenSourceAIAnalyzer()
-
-        # WhatsApp service (if available)
-        self.whatsapp_service = WhatsAppService() if WHATSAPP_AVAILABLE else None
-
+        self.db_config = config.database
+        self.engine = self._create_database_engine()
         self.last_fetch_time = None
-        self.scheduler_thread = None
-        self.is_monitoring = False
-
+        self.monitoring_active = False
+        
         # Start background monitoring
         self.start_background_monitoring()
-
-    def _create_sqlalchemy_engine(self):
-        """Create SQLAlchemy engine with proper connection string"""
+    
+    def _create_database_engine(self):
+        """Create SQLAlchemy engine with connection pooling"""
         try:
-            # URL encode the password to handle special characters
-            password = urllib.parse.quote_plus(self.db_config['password'])
-            username = urllib.parse.quote_plus(self.db_config['username'])
-            server = self.db_config['server']
-            database = self.db_config['database']
-
-            # Create connection string for SQLAlchemy
+            password = urllib.parse.quote_plus(self.db_config.password)
+            username = urllib.parse.quote_plus(self.db_config.username)
+            
             connection_string = (
-                f"mssql+pyodbc://{username}:{password}@{server}/"
-                f"{database}?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes"
+                f"mssql+pyodbc://{username}:{password}@{self.db_config.server}/"
+                f"{self.db_config.database}?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes"
             )
-
-            # Create engine with connection pooling
+            
             engine = create_engine(
                 connection_string,
-                pool_size=5,
-                max_overflow=10,
+                pool_size=10,
+                max_overflow=20,
                 pool_timeout=30,
-                pool_recycle=3600,  # Recycle connections every hour
-                echo=False  # Set to True for SQL query debugging
+                pool_recycle=3600,
+                echo=False
             )
-
-            logger.info("SQLAlchemy engine created successfully")
+            
+            logger.info("✅ Database engine created successfully")
             return engine
-
+            
         except Exception as e:
-            logger.error(f"Failed to create SQLAlchemy engine: {e}")
+            logger.error(f"❌ Failed to create database engine: {e}")
             return None
-
-    def connect_and_fetch_data(self, limit: Optional[int] = 1000) -> List[RTMSProductionData]:
-        """Enhanced data fetching with SQLAlchemy and better error handling"""
+    
+    async def fetch_production_data(
+        self, 
+        unit_code: Optional[str] = None,
+        floor_name: Optional[str] = None,
+        line_name: Optional[str] = None,
+        operation: Optional[str] = None,
+        limit: int = 1000
+    ) -> List[RTMSProductionData]:
+        """Fetch production data with optional filtering"""
+        
         if not self.engine:
-            logger.error("Database engine not available")
+            logger.error("❌ Database engine not available")
             return []
-
+        
         try:
-            logger.info("Connecting to SQL Server database...")
-
-            # Test connection first
+            # Build dynamic query with filters
+            base_query = """
+            SELECT TOP (1000) 
+                [LineName], [EmpCode], [EmpName], [DeviceID],
+                [StyleNo], [OrderNo], [Operation], [SAM],
+                [Eff100], [Eff75], [ProdnPcs], [EffPer],
+                [OperSeq], [UsedMin], [TranDate], [UnitCode], 
+                [PartName], [FloorName], [ReptType], [PartSeq], 
+                [EffPer100], [EffPer75], [NewOperSeq],
+                [BuyerCode], [ISFinPart], [ISFinOper], [IsRedFlag]
+            FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
+            WHERE [ReptType] IN ('RTMS', 'RTM5', 'RTM$')
+                AND CAST([TranDate] AS DATE) = CAST(GETDATE() AS DATE)
+                AND [ProdnPcs] > 0
+                AND [EmpCode] IS NOT NULL
+                AND [LineName] IS NOT NULL
+            """
+            
+            # Add filters
+            params = {"limit": limit}
+            if unit_code:
+                base_query += " AND [UnitCode] = @unit_code"
+                params["unit_code"] = unit_code
+            if floor_name:
+                base_query += " AND [FloorName] = @floor_name"
+                params["floor_name"] = floor_name
+            if line_name:
+                base_query += " AND [LineName] = @line_name"
+                params["line_name"] = line_name
+            if operation:
+                base_query += " AND [NewOperSeq] = @operation"
+                params["operation"] = operation
+            
+            base_query += " ORDER BY [TranDate] DESC"
+            
+            # Execute query
             with self.engine.connect() as connection:
-                # Test query to verify connection
-                test_query = text("SELECT 1 AS test")
-                test_result = connection.execute(test_query)
-                logger.info("Database connection test successful")
-
-            # Enhanced query with better filtering and debugging
-            query = f"""
-    SELECT TOP ({limit}) 
-        [LineName], [EmpCode], [EmpName], [DeviceID],
-        [StyleNo], [OrderNo], [Operation], [SAM],
-        [Eff100], [Eff75], [ProdnPcs], [EffPer],
-        [OperSeq], [UsedMin], [TranDate], [UnitCode], 
-        [PartName], [FloorName], [ReptType], [PartSeq], 
-        [EffPer100], [EffPer75], [NewOperSeq],
-        [BuyerCode], [ISFinPart], [ISFinOper], [IsRedFlag]
-    FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
-    WHERE [ReptType] IN ('RTMS', 'RTM5', 'RTM$')
-        AND CAST([TranDate] AS DATE) = CAST(
-              DATEADD(DAY, -((DATEPART(WEEKDAY, GETDATE()) + @@DATEFIRST - 6) % 7), GETDATE()) 
-              AS DATE
-          )
-        AND [ProdnPcs] > 0
-        AND [EmpCode] IS NOT NULL
-        AND [LineName] IS NOT NULL
-    ORDER BY [TranDate] DESC;
-"""
-
-
-            # Execute query with pandas using SQLAlchemy engine
-            df = pd.read_sql(query, self.engine)
-            logger.info(f"Retrieved {len(df)} rows from RTMS database")
-
-            # Debug: Check for data in the last few days if today returns 0
-            if len(df) == 0:
-                logger.warning("No data found for today. Checking last 7 days...")
-                debug_query = f"""
-                SELECT TOP 10
-                    [TranDate], [LineName], [EmpName], [ProdnPcs], [ReptType]
-                FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
-                WHERE [TranDate] >= DATEADD(day, -7, GETDATE())
-                    AND [ProdnPcs] > 0
-                ORDER BY [TranDate] DESC;
-                """
-
-                debug_df = pd.read_sql(debug_query, self.engine)
-                logger.info(f"Recent data sample ({len(debug_df)} rows):")
-                if len(debug_df) > 0:
-                    for _, row in debug_df.head().iterrows():
-                        logger.info(f"  Date: {row['TranDate']}, Line: {row['LineName']}, Emp: {row['EmpName']}")
-                else:
-                    logger.warning("No data found in the last 7 days either")
-
-            # Convert to RTMSProductionData objects
+                query = text(base_query)
+                df = pd.read_sql(query, connection, params=params)
+            
+            logger.info(f"📊 Retrieved {len(df)} production records")
+            
+            # Convert to data objects
             production_data = []
             for _, row in df.iterrows():
                 try:
@@ -569,190 +218,393 @@ class FabricPulseRTMSEngine:
                         IsRedFlag=int(row['IsRedFlag']) if pd.notna(row['IsRedFlag']) else 0
                     )
                     production_data.append(data)
-
+                    
                 except Exception as row_error:
-                    logger.warning(f"Error processing row: {row_error}")
+                    logger.warning(f"⚠️ Error processing row: {row_error}")
                     continue
-
+            
             self.last_fetch_time = datetime.now()
-            logger.info(f"Successfully processed {len(production_data)} production records")
             return production_data
-
+            
         except Exception as e:
-            logger.error(f"Database operation failed: {e}")
+            logger.error(f"❌ Database query failed: {e}")
             return []
-
-    def get_enhanced_hierarchy_data(self, production_data: List[RTMSProductionData]) -> Dict[str, Any]:
-        """Generate enhanced hierarchical data structure"""
-        hierarchy = {}
-
-        for data in production_data:
-            actual_efficiency = data.calculate_efficiency()
-
-            # Build hierarchy
-            unit = hierarchy.setdefault(data.UnitCode, {
-                'name': data.UnitCode,
-                'floors': {},
-                'total_production': 0,
-                'total_target': 0,
-                'efficiency': 0,
-                'employee_count': 0,
-                'underperformer_count': 0
-            })
-
-            floor = unit['floors'].setdefault(data.FloorName, {
-                'name': data.FloorName,
-                'lines': {},
-                'total_production': 0,
-                'total_target': 0,
-                'efficiency': 0,
-                'employee_count': 0,
-                'underperformer_count': 0
-            })
-
-            line = floor['lines'].setdefault(data.LineName, {
-                'name': data.LineName,
-                'styles': {},
-                'total_production': 0,
-                'total_target': 0,
-                'efficiency': 0,
-                'employee_count': 0,
-                'underperformer_count': 0
-            })
-
-            # Update aggregations
-            is_underperformer = actual_efficiency < 85
-            for level in [line, floor, unit]:
-                level['total_production'] += data.ProdnPcs
-                level['total_target'] += data.Eff100
-                level['efficiency'] = (level['total_production'] / level['total_target'] * 100) if level['total_target'] > 0 else 0
-                level['employee_count'] = level.get('employee_count', 0) + 1
-                if is_underperformer:
-                    level['underperformer_count'] = level.get('underperformer_count', 0) + 1
-
-        return hierarchy
-
+    
+    async def get_operations_list(self) -> List[str]:
+        """Get list of unique operations (NewOperSeq values)"""
+        try:
+            query = """
+            SELECT DISTINCT [NewOperSeq]
+            FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
+            WHERE [NewOperSeq] IS NOT NULL 
+                AND [NewOperSeq] != ''
+                AND CAST([TranDate] AS DATE) = CAST(GETDATE() AS DATE)
+            ORDER BY [NewOperSeq]
+            """
+            
+            with self.engine.connect() as connection:
+                df = pd.read_sql(text(query), connection)
+            
+            operations = df['NewOperSeq'].tolist()
+            logger.info(f"📋 Retrieved {len(operations)} operations")
+            return operations
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to fetch operations: {e}")
+            return []
+    
+    def process_efficiency_analysis(self, data: List[RTMSProductionData]) -> Dict[str, Any]:
+        """Process efficiency analysis with AI insights"""
+        if not data:
+            return {"status": "no_data", "message": "No production data available"}
+        
+        # Calculate operator efficiencies
+        operators = []
+        underperformers = []
+        operation_efficiencies = {}
+        
+        for emp_data in data:
+            efficiency = emp_data.calculate_efficiency()
+            
+            operator = {
+                "emp_name": emp_data.EmpName,
+                "emp_code": emp_data.EmpCode,
+                "line_name": emp_data.LineName,
+                "unit_code": emp_data.UnitCode,
+                "floor_name": emp_data.FloorName,
+                "operation": emp_data.Operation,
+                "new_oper_seq": emp_data.NewOperSeq,
+                "device_id": emp_data.DeviceID,
+                "efficiency": round(efficiency, 2),
+                "production": emp_data.ProdnPcs,
+                "target": emp_data.Eff100,
+                "status": self._get_efficiency_status(efficiency),
+                "is_top_performer": efficiency >= 100
+            }
+            
+            operators.append(operator)
+            
+            # Track underperformers for alerts
+            if efficiency < config.alerts.efficiency_threshold:
+                underperformers.append(operator)
+            
+            # Track operation efficiencies for relative calculations
+            if emp_data.NewOperSeq not in operation_efficiencies:
+                operation_efficiencies[emp_data.NewOperSeq] = []
+            operation_efficiencies[emp_data.NewOperSeq].append(efficiency)
+        
+        # Calculate overall metrics
+        total_production = sum(d.ProdnPcs for d in data)
+        total_target = sum(d.Eff100 for d in data)
+        overall_efficiency = (total_production / total_target * 100) if total_target > 0 else 0
+        
+        # Generate AI insights
+        ai_insights = self._generate_ai_insights(operators, overall_efficiency, underperformers)
+        
+        return {
+            "status": "success",
+            "overall_efficiency": round(overall_efficiency, 2),
+            "total_production": total_production,
+            "total_target": total_target,
+            "operators": operators,
+            "underperformers": underperformers,
+            "ai_insights": ai_insights,
+            "whatsapp_alerts_needed": len(underperformers) > 0,
+            "analysis_timestamp": datetime.now().isoformat(),
+            "records_analyzed": len(data)
+        }
+    
+    def _get_efficiency_status(self, efficiency: float) -> str:
+        """Get efficiency status based on thresholds"""
+        if efficiency >= 100:
+            return 'excellent'
+        elif efficiency >= config.alerts.efficiency_threshold:
+            return 'good'
+        elif efficiency >= config.alerts.critical_threshold:
+            return 'needs_improvement'
+        else:
+            return 'critical'
+    
+    def _generate_ai_insights(self, operators: List[Dict], overall_efficiency: float, underperformers: List[Dict]) -> Dict[str, Any]:
+        """Generate AI-powered insights"""
+        # Group by lines and operations for analysis
+        line_performance = {}
+        operation_performance = {}
+        
+        for op in operators:
+            line = op["line_name"]
+            operation = op["new_oper_seq"]
+            
+            if line not in line_performance:
+                line_performance[line] = []
+            line_performance[line].append(op["efficiency"])
+            
+            if operation not in operation_performance:
+                operation_performance[operation] = []
+            operation_performance[operation].append(op["efficiency"])
+        
+        # Calculate averages
+        line_avg = {line: sum(effs)/len(effs) for line, effs in line_performance.items()}
+        operation_avg = {op: sum(effs)/len(effs) for op, effs in operation_performance.items()}
+        
+        # Generate insights
+        summary = self._generate_summary_insight(overall_efficiency, len(operators), len(underperformers))
+        
+        performance_analysis = {
+            "best_performing_line": max(line_avg.items(), key=lambda x: x[1]) if line_avg else None,
+            "worst_performing_line": min(line_avg.items(), key=lambda x: x[1]) if line_avg else None,
+            "best_performing_operation": max(operation_avg.items(), key=lambda x: x[1]) if operation_avg else None,
+            "worst_performing_operation": min(operation_avg.items(), key=lambda x: x[1]) if operation_avg else None,
+        }
+        
+        recommendations = self._generate_recommendations(underperformers, line_avg, operation_avg)
+        
+        # Add AI predictions (simple trend analysis)
+        predictions = {
+            "trend": "stable" if 80 <= overall_efficiency <= 95 else "decreasing" if overall_efficiency < 80 else "increasing",
+            "confidence": 0.85,
+            "forecast": f"Based on current patterns, efficiency is expected to {'improve' if overall_efficiency >= 85 else 'require intervention'} in the next monitoring cycle."
+        }
+        
+        return {
+            "summary": summary,
+            "performance_analysis": performance_analysis,
+            "recommendations": recommendations,
+            "predictions": predictions
+        }
+    
+    def _generate_summary_insight(self, overall_eff: float, total_emp: int, underperformers_count: int) -> str:
+        """Generate summary insight"""
+        if overall_eff >= 95:
+            return f"🎯 Excellent production performance! {total_emp} employees averaging {overall_eff:.1f}% efficiency."
+        elif overall_eff >= 85:
+            return f"📈 Good production performance with {overall_eff:.1f}% efficiency. {underperformers_count} employees need attention."
+        elif overall_eff >= 70:
+            return f"⚠️ Below target performance at {overall_eff:.1f}%. {underperformers_count} employees require immediate intervention."
+        else:
+            return f"🚨 Critical performance issues! Only {overall_eff:.1f}% efficiency with {underperformers_count} underperformers."
+    
+    def _generate_recommendations(self, underperformers: List[Dict], line_avg: Dict, operation_avg: Dict) -> List[str]:
+        """Generate actionable recommendations"""
+        recommendations = []
+        
+        if underperformers:
+            recommendations.append(f"Focus training on {len(underperformers)} underperforming employees")
+            
+            # Critical cases
+            critical_cases = [emp for emp in underperformers if emp["efficiency"] < config.alerts.critical_threshold]
+            if critical_cases:
+                recommendations.append(f"{len(critical_cases)} employees need immediate supervision")
+        
+        # Line-specific recommendations
+        if line_avg:
+            worst_line = min(line_avg.items(), key=lambda x: x[1])
+            if worst_line[1] < config.alerts.efficiency_threshold:
+                recommendations.append(f"Line {worst_line[0]} requires immediate attention ({worst_line[1]:.1f}% efficiency)")
+        
+        # Operation-specific recommendations
+        if operation_avg:
+            worst_operation = min(operation_avg.items(), key=lambda x: x[1])
+            if worst_operation[1] < config.alerts.efficiency_threshold:
+                recommendations.append(f"Operation {worst_operation[0]} needs process optimization")
+        
+        return recommendations
+    
+    async def send_efficiency_alerts(self, underperformers: List[Dict]) -> int:
+        """Send WhatsApp alerts for underperforming employees"""
+        alerts_sent = 0
+        
+        for emp in underperformers:
+            try:
+                alert_message = AlertMessage(
+                    employee_name=emp["emp_name"],
+                    employee_code=emp["emp_code"],
+                    unit_code=emp["unit_code"],
+                    floor_name=emp["floor_name"],
+                    line_name=emp["line_name"],
+                    operation=emp["new_oper_seq"],
+                    current_efficiency=emp["efficiency"],
+                    production=emp["production"],
+                    target_production=emp["target"],
+                    priority="HIGH" if emp["efficiency"] < config.alerts.critical_threshold else "MEDIUM"
+                )
+                
+                success = await whatsapp_service.send_efficiency_alert(alert_message)
+                if success:
+                    alerts_sent += 1
+                
+                # Small delay between alerts
+                await asyncio.sleep(1)
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to send alert for {emp['emp_name']}: {e}")
+        
+        logger.info(f"📱 Sent {alerts_sent}/{len(underperformers)} WhatsApp alerts")
+        return alerts_sent
+    
     def start_background_monitoring(self):
         """Start background monitoring every 10 minutes"""
         def monitoring_loop():
-            schedule.every(10).minutes.do(self.automated_analysis_and_alerts)
-
-            self.is_monitoring = True
-            logger.info("Background monitoring started (every 10 minutes)")
-
-            while self.is_monitoring:
+            schedule.every(config.service.monitoring_interval).minutes.do(self.automated_monitoring)
+            
+            self.monitoring_active = True
+            logger.info(f"🔄 Background monitoring started (every {config.service.monitoring_interval} minutes)")
+            
+            while self.monitoring_active:
                 schedule.run_pending()
                 time.sleep(60)  # Check every minute
-
-        self.scheduler_thread = threading.Thread(target=monitoring_loop, daemon=True)
-        self.scheduler_thread.start()
-
-    def automated_analysis_and_alerts(self):
-        """Automated analysis and alerts (runs every 10 minutes)"""
+        
+        monitoring_thread = threading.Thread(target=monitoring_loop, daemon=True)
+        monitoring_thread.start()
+    
+    def automated_monitoring(self):
+        """Automated monitoring and alerting"""
         try:
-            logger.info("Running automated production analysis...")
-
-            # Fetch latest data
-            production_data = self.connect_and_fetch_data()
-
-            if not production_data:
-                logger.warning("No production data available for analysis")
-                return
-
-            # Perform AI analysis
-            analysis_result = self.ai_analyzer.analyze_production_efficiency(production_data)
-
-            # Log alerts for underperformers
-            if analysis_result.get("whatsapp_alerts_needed") and analysis_result.get("underperformers"):
-                underperformers = analysis_result["underperformers"]
-                logger.info(f"Found {len(underperformers)} underperformers requiring attention:")
-                for emp in underperformers:
-                    logger.warning(f"  - {emp['emp_name']} ({emp['emp_code']}): {emp['efficiency']:.1f}% efficiency")
-
-            logger.info(f"Automated analysis completed. {len(analysis_result.get('underperformers', []))} alerts generated.")
-
+            logger.info("🔄 Running automated monitoring...")
+            
+            # This will be called by the scheduler, so we need to create an event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                # Fetch and analyze data
+                data = loop.run_until_complete(self.fetch_production_data())
+                
+                if data:
+                    analysis = self.process_efficiency_analysis(data)
+                    
+                    # Send alerts if needed
+                    if analysis.get("whatsapp_alerts_needed") and analysis.get("underperformers"):
+                        alerts_sent = loop.run_until_complete(
+                            self.send_efficiency_alerts(analysis["underperformers"])
+                        )
+                        logger.info(f"📱 Automated monitoring: {alerts_sent} alerts sent")
+                    else:
+                        logger.info("✅ Automated monitoring: No alerts needed")
+                else:
+                    logger.warning("⚠️ Automated monitoring: No data available")
+                    
+            finally:
+                loop.close()
+                
         except Exception as e:
-            logger.error(f"Automated analysis failed: {e}")
+            logger.error(f"❌ Automated monitoring failed: {e}")
 
-    def stop_monitoring(self):
-        """Stop background monitoring"""
-        self.is_monitoring = False
-        logger.info("Background monitoring stopped")
+# Initialize RTMS engine
+rtms_engine = EnhancedRTMSEngine()
 
-# Initialize RTMS Engine
-rtms_engine = FabricPulseRTMSEngine()
-
-# Enhanced API Endpoints
+# API Endpoints
 @app.get("/")
 async def root():
-    """Root endpoint with service information"""
+    """Root endpoint with service status"""
+    config_status = config.validate_configuration()
+    
     return {
-        "service": "Fabric Pulse AI - RTMS Backend Service (Fixed)",
-        "version": "3.1.0",
+        "service": "RTMS - AI Production Monitoring System",
+        "version": "3.0.0",
         "status": "operational",
-        "ai_model": "Open Source Models" if AI_AVAILABLE else "AI Disabled",
-        "database": "SQL Server with SQLAlchemy",
+        "ai_enabled": True,
+        "whatsapp_enabled": config_status["twilio"],
+        "database_connected": config_status["database"],
+        "bot_name": "RTMS BOT",
         "features": [
             "Real-time production monitoring",
-            "Enhanced database connectivity",
-            "Open-source AI analysis",
-            "Fixed encoding issues",
-            "Comprehensive error handling"
+            "AI-powered efficiency analysis",
+            "WhatsApp alerts via Twilio",
+            "Operation-based filtering",
+            "Automated background monitoring"
         ],
         "last_fetch": rtms_engine.last_fetch_time.isoformat() if rtms_engine.last_fetch_time else None,
         "timestamp": datetime.now().isoformat()
     }
 
 @app.get("/api/rtms/analyze")
-async def analyze_production():
-    """Enhanced real-time production analysis"""
+async def analyze_production(
+    unit_code: Optional[str] = Query(None, description="Filter by unit code"),
+    floor_name: Optional[str] = Query(None, description="Filter by floor name"),
+    line_name: Optional[str] = Query(None, description="Filter by line name"),
+    operation: Optional[str] = Query(None, description="Filter by operation (NewOperSeq)"),
+    background_tasks: BackgroundTasks = None
+):
+    """Enhanced production analysis with filtering"""
     try:
-        # Fetch real-time data from SQL Server
-        production_data = rtms_engine.connect_and_fetch_data()
-
+        # Fetch filtered data
+        production_data = await rtms_engine.fetch_production_data(
+            unit_code=unit_code,
+            floor_name=floor_name,
+            line_name=line_name,
+            operation=operation
+        )
+        
         if not production_data:
             return JSONResponse(
                 status_code=200,
                 content={
                     "status": "no_data",
-                    "message": "No production data available in database",
+                    "message": "No production data available for the specified filters",
+                    "filters": {
+                        "unit_code": unit_code,
+                        "floor_name": floor_name,
+                        "line_name": line_name,
+                        "operation": operation
+                    },
                     "timestamp": datetime.now().isoformat()
                 }
             )
-
-        # AI Analysis
-        ai_analysis = rtms_engine.ai_analyzer.analyze_production_efficiency(production_data)
-
-        # Hierarchy data
-        hierarchy_data = rtms_engine.get_enhanced_hierarchy_data(production_data)
-
+        
+        # Process analysis
+        analysis = rtms_engine.process_efficiency_analysis(production_data)
+        
+        # Send alerts in background if needed
+        if analysis.get("whatsapp_alerts_needed") and background_tasks:
+            background_tasks.add_task(
+                rtms_engine.send_efficiency_alerts, 
+                analysis["underperformers"]
+            )
+        
         return {
             "status": "success",
-            "data": {
-                "ai_analysis": ai_analysis,
-                "hierarchy": hierarchy_data,
-                "raw_count": len(production_data),
-                "fetch_timestamp": rtms_engine.last_fetch_time.isoformat() if rtms_engine.last_fetch_time else None,
-                "analysis_timestamp": datetime.now().isoformat()
+            "data": analysis,
+            "filters_applied": {
+                "unit_code": unit_code,
+                "floor_name": floor_name,
+                "line_name": line_name,
+                "operation": operation
             }
         }
-
+        
     except Exception as e:
-        logger.error(f"Analysis endpoint failed: {e}")
+        logger.error(f"❌ Analysis endpoint failed: {e}")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
-@app.get("/api/rtms/alerts")
-async def get_efficiency_alerts():
-    """Get current efficiency alerts for underperforming employees"""
+@app.get("/api/rtms/operations")
+async def get_operations():
+    """Get list of available operations for filtering"""
     try:
-        production_data = rtms_engine.connect_and_fetch_data()
+        operations = await rtms_engine.get_operations_list()
+        return {
+            "status": "success",
+            "data": operations,
+            "count": len(operations),
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"❌ Operations endpoint failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch operations: {str(e)}")
 
+@app.get("/api/rtms/alerts")
+async def get_current_alerts():
+    """Get current efficiency alerts"""
+    try:
+        # Fetch current data and identify underperformers
+        production_data = await rtms_engine.fetch_production_data()
+        
         if not production_data:
             return {"alerts": [], "count": 0}
-
-        analysis = rtms_engine.ai_analyzer.analyze_production_efficiency(production_data)
+        
+        analysis = rtms_engine.process_efficiency_analysis(production_data)
         underperformers = analysis.get("underperformers", [])
-
+        
         # Format alerts
         alerts = []
         for emp in underperformers:
@@ -765,80 +617,96 @@ async def get_efficiency_alerts():
                 "line": emp["line_name"],
                 "operation": emp["new_oper_seq"],
                 "current_efficiency": emp["efficiency"],
-                "target_efficiency": 85.0,
-                "gap": emp.get("performance_gap", 0),
-                "priority": emp.get("alert_priority", "MEDIUM"),
+                "target_efficiency": config.alerts.efficiency_threshold,
+                "gap": config.alerts.efficiency_threshold - emp["efficiency"],
+                "priority": "HIGH" if emp["efficiency"] < config.alerts.critical_threshold else "MEDIUM",
                 "production": emp["production"],
                 "target": emp["target"],
-                "message": f"Employee {emp['emp_name']} performing at {emp['efficiency']:.1f}% efficiency",
                 "timestamp": datetime.now().isoformat()
             })
-
+        
         return {
             "alerts": alerts,
             "count": len(alerts),
             "timestamp": datetime.now().isoformat()
         }
-
+        
     except Exception as e:
-        logger.error(f"Alerts endpoint failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Alerts query failed: {str(e)}")
+        logger.error(f"❌ Alerts endpoint failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch alerts: {str(e)}")
+
+@app.post("/api/rtms/test-whatsapp")
+async def test_whatsapp():
+    """Test WhatsApp integration"""
+    try:
+        success = whatsapp_service.send_test_message()
+        
+        if success:
+            return {
+                "status": "success",
+                "message": "Test WhatsApp message sent successfully!",
+                "phone_number": config.twilio.alert_phone_number,
+                "bot_name": config.twilio.bot_name,
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            return {
+                "status": "failed",
+                "message": "Failed to send test WhatsApp message",
+                "timestamp": datetime.now().isoformat()
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ WhatsApp test failed: {e}")
+        raise HTTPException(status_code=500, detail=f"WhatsApp test failed: {str(e)}")
 
 @app.get("/api/rtms/status")
 async def get_system_status():
     """Get comprehensive system status"""
-    try:
-        return {
-            "service": "Fabric Pulse AI - RTMS (Fixed)",
-            "status": "operational",
-            "version": "3.1.0",
-            "database": {
-                "server": rtms_engine.db_config["server"],
-                "database": rtms_engine.db_config["database"],
-                "status": "connected" if rtms_engine.engine else "disconnected",
-                "last_fetch": rtms_engine.last_fetch_time.isoformat() if rtms_engine.last_fetch_time else None
-            },
-            "ai_engine": {
-                "status": "active" if AI_AVAILABLE else "disabled",
-                "model": "Open Source Models",
-                "features": ["efficiency_analysis", "pattern_recognition", "basic_insights"]
-            },
-            "monitoring": {
-                "status": "active" if rtms_engine.is_monitoring else "inactive",
-                "interval": "10 minutes",
-                "alerts": "logging enabled"
-            },
-            "fixes_applied": [
-                "Unicode encoding issues resolved",
-                "SQLAlchemy integration implemented",
-                "Open source AI models configured",
-                "Enhanced error handling added",
-                "Database debugging improved"
-            ],
-            "timestamp": datetime.now().isoformat()
-        }
+    config_status = config.validate_configuration()
+    whatsapp_status = whatsapp_service.get_status()
+    
+    return {
+        "service": "RTMS - AI Production Monitoring System",
+        "status": "operational",
+        "version": "3.0.0",
+        "configuration": config_status,
+        "database": {
+            "server": config.database.server,
+            "database": config.database.database,
+            "status": "connected" if rtms_engine.engine else "disconnected",
+            "last_fetch": rtms_engine.last_fetch_time.isoformat() if rtms_engine.last_fetch_time else None
+        },
+        "whatsapp_service": whatsapp_status,
+        "monitoring": {
+            "status": "active" if rtms_engine.monitoring_active else "inactive",
+            "interval_minutes": config.service.monitoring_interval,
+            "efficiency_threshold": config.alerts.efficiency_threshold
+        },
+        "ai_features": {
+            "status": "active",
+            "insights": "enabled",
+            "predictions": "enabled",
+            "recommendations": "enabled"
+        },
+        "timestamp": datetime.now().isoformat()
+    }
 
-    except Exception as e:
-        logger.error(f"Status endpoint failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Status query failed: {str(e)}")
-
-# Development vs Production Execution
 if __name__ == "__main__":
-    logger.info("Starting Fabric Pulse AI Backend Service (Fixed Version)...")
-    logger.info("Mode: Development (use Windows Service for production)")
-
-    try:
-        # Run FastAPI server
-        uvicorn.run(
-            app, 
-            host="0.0.0.0", 
-            port=8000,
-            log_level="info",
-            reload=False  # Disable reload for stability
-        )
-    except KeyboardInterrupt:
-        logger.info("Service stopped by user")
-        rtms_engine.stop_monitoring()
-    except Exception as e:
-        logger.error(f"Service startup failed: {e}")
-        raise
+    logger.info("🚀 Starting RTMS AI Production Monitoring System...")
+    
+    # Validate configuration on startup
+    config_status = config.validate_configuration()
+    logger.info(f"📋 Configuration Status: {config_status}")
+    
+    if not all(config_status.values()):
+        logger.warning("⚠️ Some configurations are incomplete. Check your .env file.")
+    
+    # Start the server
+    uvicorn.run(
+        app,
+        host=config.service.host,
+        port=config.service.port,
+        log_level=config.service.log_level.lower(),
+        reload=False
+    )

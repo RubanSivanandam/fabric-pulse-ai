@@ -1,0 +1,208 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Industrial Production Monitoring Design System */
+
+@layer base {
+  :root {
+    /* Dynamic Industrial Theme - Vibrant & Professional */
+    --background: 220 25% 6%;
+    --foreground: 0 0% 98%;
+
+    --card: 220 30% 8%;
+    --card-foreground: 0 0% 95%;
+
+    --popover: 220 30% 8%;
+    --popover-foreground: 0 0% 95%;
+
+    /* Vibrant Electric Blue Primary */
+    --primary: 214 100% 65%;
+    --primary-foreground: 0 0% 98%;
+    --primary-glow: 214 100% 75%;
+
+    /* Rich Secondary Colors */
+    --secondary: 280 70% 50%;
+    --secondary-foreground: 0 0% 98%;
+
+    --muted: 220 25% 10%;
+    --muted-foreground: 0 0% 70%;
+
+    /* Vibrant Accent - Neon Green */
+    --accent: 120 100% 50%;
+    --accent-foreground: 220 25% 6%;
+
+    --destructive: 0 100% 65%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 220 30% 18%;
+    --input: 220 30% 12%;
+    --ring: 214 100% 65%;
+
+    /* Enhanced Status Colors */
+    --warning: 45 100% 60%;
+    --warning-foreground: 220 25% 6%;
+    --success: 120 100% 45%;
+    --success-foreground: 0 0% 98%;
+    --info: 200 100% 60%;
+    --info-foreground: 0 0% 98%;
+
+    /* Dynamic Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(214, 100%, 65%), hsl(280, 70%, 50%));
+    --gradient-success: linear-gradient(135deg, hsl(120, 100%, 45%), hsl(140, 80%, 40%));
+    --gradient-warning: linear-gradient(135deg, hsl(45, 100%, 60%), hsl(35, 100%, 55%));
+    --gradient-danger: linear-gradient(135deg, hsl(0, 100%, 65%), hsl(320, 100%, 60%));
+    --gradient-neon: linear-gradient(135deg, hsl(120, 100%, 50%), hsl(200, 100%, 60%));
+    --gradient-cyber: linear-gradient(135deg, hsl(280, 70%, 50%), hsl(214, 100%, 65%));
+
+    /* Enhanced Shadows & Effects */
+    --shadow-glow: 0 0 30px hsl(214, 100%, 65%, 0.5);
+    --shadow-card: 0 8px 32px hsl(0, 0%, 0%, 0.6);
+    --shadow-alert: 0 0 20px hsl(0, 100%, 65%, 0.6);
+    --shadow-success: 0 0 20px hsl(120, 100%, 45%, 0.4);
+    --shadow-neon: 0 0 40px hsl(120, 100%, 50%, 0.3);
+
+    /* Animation & Transition Variables */
+    --animation-speed: 0.3s;
+    --animation-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+    --animation-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+
+    --radius: 1rem;
+
+    --sidebar-background: 0 0% 98%;
+
+    --sidebar-foreground: 240 5.3% 26.1%;
+
+    --sidebar-primary: 240 5.9% 10%;
+
+    --sidebar-primary-foreground: 0 0% 98%;
+
+    --sidebar-accent: 240 4.8% 95.9%;
+
+    --sidebar-accent-foreground: 240 5.9% 10%;
+
+    --sidebar-border: 220 13% 91%;
+
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 212.7 26.8% 83.9%;
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground overflow-x-hidden;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  /* Smooth scrolling */
+  html {
+    scroll-behavior: smooth;
+  }
+
+  /* Professional Loading Animation */
+  .loading-pulse {
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  /* Glow effects for dynamic elements */
+  .glow-effect {
+    filter: drop-shadow(var(--shadow-glow));
+    transition: filter var(--animation-speed) var(--animation-smooth);
+  }
+
+  .glow-effect:hover {
+    filter: drop-shadow(0 0 40px hsl(214, 100%, 65%, 0.7));
+  }
+
+  /* Professional glassmorphism */
+  .glass-card {
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  /* Enhanced animations */
+  .fade-in-up {
+    animation: fadeInUp 0.6s var(--animation-bounce) both;
+  }
+
+  .fade-in-scale {
+    animation: fadeInScale 0.5s var(--animation-smooth) both;
+  }
+
+  @keyframes fadeInUp {
+    from {
+      opacity: 0;
+      transform: translateY(30px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes fadeInScale {
+    from {
+      opacity: 0;
+      transform: scale(0.9);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  /* Responsive typography */
+  @media (max-width: 640px) {
+    body {
+      font-size: 14px;
+    }
+  }
+
+  @media (min-width: 1920px) {
+    body {
+      font-size: 18px;
+    }
+  }
+}
