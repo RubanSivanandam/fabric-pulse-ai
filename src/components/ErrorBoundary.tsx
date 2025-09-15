@@ -1,4 +1,7 @@
-import React, { Component, ErrorInfo, ReactNode } from 'react';
+import React, { Component, ErrorInfo, ReactNode } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { AlertTriangle, RefreshCw } from "lucide-react";
 
 interface Props {
   children: ReactNode;
@@ -12,58 +15,70 @@ interface State {
 }
 
 export class ErrorBoundary extends Component<Props, State> {
-  constructor(props: Props) {
-    super(props);
-    this.state = { hasError: false };
-  }
+  public state: State = {
+    hasError: false,
+  };
 
-  static getDerivedStateFromError(error: Error): State {
+  public static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    // Filter out extension errors
-    const isExtensionError = error.message.includes('chrome-extension') ||
-                           error.message.includes('mcafee') ||
-                           error.message.includes('moz-extension') ||
-                           error.stack?.includes('chrome-extension') ||
-                           error.stack?.includes('mcafee');
-    
-    if (!isExtensionError) {
-      console.error('ErrorBoundary caught an error:', error, errorInfo);
-      this.setState({ error, errorInfo });
-    } else {
-      // Reset error state for extension errors
-      this.setState({ hasError: false });
-    }
+  public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("Uncaught error:", error, errorInfo);
+    this.setState({ error, errorInfo });
   }
 
-  render() {
+  private handleRetry = () => {
+    this.setState({ hasError: false, error: undefined, errorInfo: undefined });
+  };
+
+  public render() {
     if (this.state.hasError) {
       if (this.props.fallback) {
         return this.props.fallback;
       }
 
       return (
-        <div className="error-boundary">
-          <div className="error-boundary-content">
-            <h2>🚨 Something went wrong</h2>
-            <p>We encountered an unexpected error. Please try refreshing the page.</p>
-            <details className="error-details">
-              <summary>Error Details</summary>
-              <pre className="error-stack">
-                {this.state.error && this.state.error.toString()}
-                <br />
-                {this.state.errorInfo?.componentStack}
-              </pre>
-            </details>
-            <button
-              onClick={() => window.location.reload()}
-              className="error-reload-button"
-            >
-              Reload Page
-            </button>
-          </div>
+        <div className="flex items-center justify-center min-h-[400px] p-4">
+          <Card className="max-w-md w-full">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-destructive">
+                <AlertTriangle className="h-5 w-5" />
+                Something went wrong
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                An unexpected error occurred. Please try refreshing the page.
+              </p>
+              
+              {process.env.NODE_ENV === "development" && this.state.error && (
+                <details className="text-xs bg-muted p-2 rounded">
+                  <summary className="cursor-pointer">Error Details</summary>
+                  <pre className="mt-2 whitespace-pre-wrap">
+                    {this.state.error.message}
+                    {this.state.errorInfo?.componentStack}
+                  </pre>
+                </details>
+              )}
+              
+              <div className="flex gap-2">
+                <Button 
+                  onClick={this.handleRetry}
+                  className="flex items-center gap-2"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Try Again
+                </Button>
+                <Button 
+                  variant="outline" 
+                  onClick={() => window.location.reload()}
+                >
+                  Reload Page
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         </div>
       );
     }
@@ -71,28 +86,3 @@ export class ErrorBoundary extends Component<Props, State> {
     return this.props.children;
   }
 }
-
-// Global error handler to suppress extension errors
-window.addEventListener('error', (event) => {
-  const isExtensionError = event.filename?.includes('chrome-extension') ||
-                          event.filename?.includes('mcafee') ||
-                          event.filename?.includes('moz-extension') ||
-                          event.message?.includes('chrome-extension') ||
-                          event.message?.includes('mcafee');
-  
-  if (isExtensionError) {
-    event.preventDefault();
-    return true;
-  }
-});
-
-window.addEventListener('unhandledrejection', (event) => {
-  const isExtensionError = event.reason?.toString().includes('chrome-extension') ||
-                          event.reason?.toString().includes('mcafee') ||
-                          event.reason?.toString().includes('moz-extension');
-  
-  if (isExtensionError) {
-    event.preventDefault();
-    return true;
-  }
-});

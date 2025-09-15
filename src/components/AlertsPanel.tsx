@@ -1,5 +1,5 @@
-// src/components/AlertsPanel.tsx - Complete Alerts Management (updated, safe GSAP + defensive)
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
+import { useGSAP } from "@gsap/react";
 import { gsap } from "gsap";
 import {
   AlertTriangle,
@@ -11,6 +11,9 @@ import {
   CheckCircle,
   XCircle,
   Filter,
+  Search,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import {
   Card,
@@ -21,391 +24,426 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
+} from "@radix-ui/react-select";
 import { Progress } from "@/components/ui/progress";
 import { useAI } from "@/contexts/AIContext";
 
-interface AlertsPanelProps {
-  data: any;
+// Mock alert data type
+interface Alert {
+  id: string;
+  employee: string;
+  employee_code: string;
+  line: string;
+  operation: string;
+  efficiency: number;
+  target_efficiency: number;
+  priority: "HIGH" | "MEDIUM" | "LOW";
+  timestamp: string;
+  status: "unread" | "read" | "resolved";
+  unit?: string;
+  floor?: string;
+  production?: number;
+  target?: number;
 }
+
+interface AlertsPanelProps {
+  data?: any;
+}
+
+// Mock data generator
+const generateMockAlerts = (): Alert[] => [
+  {
+    id: "1",
+    employee: "John Doe",
+    employee_code: "EMP001",
+    line: "Line A",
+    operation: "Sewing",
+    efficiency: 72.5,
+    target_efficiency: 85,
+    priority: "HIGH",
+    timestamp: new Date().toISOString(),
+    status: "unread",
+    unit: "Unit 1",
+    floor: "Floor 2",
+    production: 145,
+    target: 200,
+  },
+  {
+    id: "2",
+    employee: "Jane Smith",
+    employee_code: "EMP002",
+    line: "Line B",
+    operation: "Cutting",
+    efficiency: 78.2,
+    target_efficiency: 85,
+    priority: "MEDIUM",
+    timestamp: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+    status: "unread",
+    unit: "Unit 1",
+    floor: "Floor 1",
+    production: 156,
+    target: 200,
+  },
+  {
+    id: "3",
+    employee: "Mike Johnson",
+    employee_code: "EMP003",
+    line: "Line C",
+    operation: "Quality Check",
+    efficiency: 68.9,
+    target_efficiency: 85,
+    priority: "HIGH",
+    timestamp: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    status: "read",
+    unit: "Unit 2",
+    floor: "Floor 1",
+    production: 138,
+    target: 200,
+  },
+];
 
 export function AlertsPanel({ data }: AlertsPanelProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [priorityFilter, setPriorityFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [alerts, setAlerts] = useState<Alert[]>(generateMockAlerts());
+  
   const { state: aiState } = useAI();
 
-  // Safe GSAP: animate panel + items only when DOM nodes exist
-  useEffect(() => {
-    let panelTween: gsap.core.Tween | null = null;
-    let itemsTween: gsap.core.Tween | null = null;
+  // GSAP Animation with proper cleanup
+  useGSAP(() => {
+    if (!panelRef.current) return;
 
-    try {
-      if (panelRef.current) {
-        panelTween = gsap.from(panelRef.current, {
-          y: 50,
-          opacity: 0,
-          duration: 0.8,
-          ease: "back.out(1.7)",
-        });
-      }
+    // Animate panel entrance
+    gsap.from(panelRef.current, {
+      y: 50,
+      opacity: 0,
+      duration: 0.8,
+      ease: "back.out(1.7)",
+    });
 
-      // query alert items inside panelRef to avoid global selector failing or matching nothing
-      const items =
-        panelRef.current?.querySelectorAll &&
-        panelRef.current.querySelectorAll(".alert-item");
-
-      if (items && items.length > 0) {
-        itemsTween = gsap.from(items, {
-          x: -30,
-          opacity: 0,
-          duration: 0.5,
-          stagger: 0.1,
-          ease: "power2.out",
-          delay: panelTween ? 0.2 : 0,
-        });
-      }
-    } catch (err) {
-      // swallow GSAP runtime errors (avoid crashing UI)
-      // log for debugging
-      // eslint-disable-next-line no-console
-      console.warn("GSAP animation failed or was skipped:", err);
-    }
-
-    return () => {
-      try {
-        panelTween?.kill();
-      } catch {}
-      try {
-        itemsTween?.kill();
-      } catch {}
-      // also kill any tweens targeting nodes inside panelRef to be safe
-      try {
-        if (panelRef.current) {
-          gsap.killTweensOf(panelRef.current);
-          const items =
-            panelRef.current.querySelectorAll && panelRef.current.querySelectorAll(".alert-item");
-          if (items && items.length > 0) gsap.killTweensOf(items as any);
-        }
-      } catch {}
-    };
-    // only run on mount/unmount; if you want to re-run on data changes change deps
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const getAlerts = () => {
-    const alerts: any[] = [];
-
-    // Add production alerts from data (defensive checks)
-    if (data && Array.isArray(data.underperformers) && data.underperformers.length > 0) {
-      data.underperformers.forEach((emp: any, index: number) => {
-        // defensive field reads with fallbacks
-        const empName = emp?.emp_name ?? emp?.name ?? `Employee-${index}`;
-        const empCode = emp?.emp_code ?? emp?.code ?? "N/A";
-        const lineName = emp?.line_name ?? emp?.line ?? "Unknown Line";
-        const newOperSeq = emp?.new_oper_seq ?? emp?.operation ?? "Op";
-        const unitCode = emp?.unit_code ?? emp?.UnitCode ?? "Unknown Unit";
-        const floorName = emp?.floor_name ?? emp?.floor ?? "Unknown Floor";
-        const efficiency = typeof emp?.efficiency === "number" ? emp.efficiency : null;
-
-        alerts.push({
-          id: `prod-${index}`,
-          type: "efficiency",
-          priority: efficiency !== null ? (efficiency < 70 ? "critical" : "high") : "high",
-          title: `Low Efficiency Alert - ${empName}`,
-          description: `Employee ${empName} (${empCode}) is performing at ${efficiency ?? "N/A"}% efficiency in ${lineName} - ${newOperSeq}`,
-          timestamp: new Date().toISOString(),
-          location: `${unitCode} > ${floorName} > ${lineName}`,
-          operation: newOperSeq,
-          efficiency,
-          target: 85,
-          status: "active",
-        });
+    // Animate alert items
+    const alertItems = panelRef.current.querySelectorAll(".alert-item");
+    if (alertItems.length > 0) {
+      gsap.from(alertItems, {
+        x: -30,
+        opacity: 0,
+        duration: 0.6,
+        stagger: 0.1,
+        ease: "power2.out",
+        delay: 0.3,
       });
     }
+  }, { scope: panelRef, dependencies: [alerts] });
 
-    // Add AI insights as alerts (defensive: aiState may be undefined or insights not array)
-    const insights = aiState?.insights;
-    if (Array.isArray(insights) && insights.length > 0) {
-      insights.forEach((insight: any) => {
-        try {
-          if (insight?.type === "alert") {
-            alerts.push({
-              id: insight.id ?? `ai-${Math.random().toString(36).slice(2, 9)}`,
-              type: "ai_alert",
-              priority: insight.priority ?? "medium",
-              title: insight.title ?? "AI Alert",
-              description: insight.description ?? "",
-              timestamp: insight.timestamp ?? new Date().toISOString(),
-              confidence:
-                typeof insight.confidence === "number" ? insight.confidence : undefined,
-              status: "active",
-            });
-          }
-        } catch (err) {
-          // skip malformed insight entries
-          // eslint-disable-next-line no-console
-          console.warn("Skipping malformed AI insight:", err, insight);
-        }
-      });
-    }
+  // Filter alerts based on search and filters
+  const filteredAlerts = useMemo(() => {
+    return alerts.filter((alert) => {
+      const matchesSearch = 
+        alert.employee.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        alert.employee_code.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        alert.line.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        alert.operation.toLowerCase().includes(searchTerm.toLowerCase());
 
-    return alerts;
+      const matchesPriority = priorityFilter === "all" || alert.priority === priorityFilter;
+      const matchesStatus = statusFilter === "all" || alert.status === statusFilter;
+
+      return matchesSearch && matchesPriority && matchesStatus;
+    });
+  }, [alerts, searchTerm, priorityFilter, statusFilter]);
+
+  // Alert actions
+  const markAsRead = (alertId: string) => {
+    setAlerts(prev => 
+      prev.map(alert => 
+        alert.id === alertId ? { ...alert, status: "read" as const } : alert
+      )
+    );
   };
 
-  const alerts = getAlerts();
-
-  const filteredAlerts = alerts.filter((alert) => {
-    if (priorityFilter !== "all" && alert.priority !== priorityFilter) return false;
-    if (statusFilter !== "all" && alert.status !== statusFilter) return false;
-    return true;
-  });
+  const markAsResolved = (alertId: string) => {
+    setAlerts(prev => 
+      prev.map(alert => 
+        alert.id === alertId ? { ...alert, status: "resolved" as const } : alert
+      )
+    );
+  };
 
   const getPriorityColor = (priority: string) => {
     switch (priority) {
-      case "critical":
-        return "text-red-400 bg-red-500/20";
-      case "high":
-        return "text-orange-400 bg-orange-500/20";
-      case "medium":
-        return "text-yellow-400 bg-yellow-500/20";
-      case "low":
-        return "text-green-400 bg-green-500/20";
+      case "HIGH":
+        return "destructive";
+      case "MEDIUM":
+        return "secondary";
+      case "LOW":
+        return "outline";
       default:
-        return "text-gray-400 bg-gray-500/20";
+        return "outline";
     }
   };
 
-  const getPriorityIcon = (priority: string) => {
-    switch (priority) {
-      case "critical":
-        return <XCircle className="h-5 w-5" />;
-      case "high":
-        return <AlertTriangle className="h-5 w-5" />;
-      case "medium":
-        return <Clock className="h-5 w-5" />;
-      case "low":
-        return <Bell className="h-5 w-5" />;
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case "unread":
+        return <Bell className="h-4 w-4" />;
+      case "read":
+        return <Eye className="h-4 w-4" />;
+      case "resolved":
+        return <CheckCircle className="h-4 w-4" />;
       default:
-        return <AlertTriangle className="h-5 w-5" />;
+        return <Bell className="h-4 w-4" />;
     }
   };
 
-  const getAlertStats = () => {
-    const stats = {
-      total: alerts.length,
-      critical: alerts.filter((a) => a.priority === "critical").length,
-      high: alerts.filter((a) => a.priority === "high").length,
-      medium: alerts.filter((a) => a.priority === "medium").length,
-      low: alerts.filter((a) => a.priority === "low").length,
-    };
-    return stats;
+  const formatTimestamp = (timestamp: string) => {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / (1000 * 60));
+    
+    if (diffMins < 1) return "Just now";
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffMins < 1440) return `${Math.floor(diffMins / 60)}h ago`;
+    return date.toLocaleDateString();
   };
 
-  const stats = getAlertStats();
-
-  // helper to format timestamp defensively
-  const formatTime = (iso?: string) => {
-    try {
-      if (!iso) return "--:--";
-      const d = new Date(iso);
-      if (isNaN(d.getTime())) return "--:--";
-      return d.toLocaleTimeString();
-    } catch {
-      return "--:--";
-    }
-  };
+  const unreadCount = alerts.filter(alert => alert.status === "unread").length;
+  const highPriorityCount = alerts.filter(alert => alert.priority === "HIGH").length;
 
   return (
-    <div ref={panelRef} className="space-y-6">
-      {/* Alert Statistics */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <Card className="bg-gradient-to-br from-gray-900/50 to-gray-800/50 border-gray-700/50">
-          <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold text-white">{stats.total}</div>
-            <div className="text-xs text-gray-400">Total Alerts</div>
+    <div ref={panelRef} className="container mx-auto p-6 space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Production Alerts</h1>
+          <p className="text-muted-foreground">
+            Monitor and manage production efficiency alerts
+          </p>
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Badge variant="destructive" className="flex items-center gap-1">
+              <AlertTriangle className="h-3 w-3" />
+              {highPriorityCount} High Priority
+            </Badge>
+            <Badge variant="secondary" className="flex items-center gap-1">
+              <Bell className="h-3 w-3" />
+              {unreadCount} Unread
+            </Badge>
+          </div>
+        </div>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Total Alerts</CardTitle>
+            <AlertTriangle className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{alerts.length}</div>
           </CardContent>
         </Card>
-        <Card className="bg-gradient-to-br from-red-900/50 to-red-800/50 border-red-500/20">
-          <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold text-red-400">{stats.critical}</div>
-            <div className="text-xs text-red-300">Critical</div>
+        
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Unread</CardTitle>
+            <Bell className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-destructive">{unreadCount}</div>
           </CardContent>
         </Card>
-        <Card className="bg-gradient-to-br from-orange-900/50 to-orange-800/50 border-orange-500/20">
-          <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold text-orange-400">{stats.high}</div>
-            <div className="text-xs text-orange-300">High</div>
+        
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">High Priority</CardTitle>
+            <XCircle className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-destructive">{highPriorityCount}</div>
           </CardContent>
         </Card>
-        <Card className="bg-gradient-to-br from-yellow-900/50 to-yellow-800/50 border-yellow-500/20">
-          <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold text-yellow-400">{stats.medium}</div>
-            <div className="text-xs text-yellow-300">Medium</div>
-          </CardContent>
-        </Card>
-        <Card className="bg-gradient-to-br from-green-900/50 to-green-800/50 border-green-500/20">
-          <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold text-green-400">{stats.low}</div>
-            <div className="text-xs text-green-300">Low</div>
+        
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Resolved</CardTitle>
+            <CheckCircle className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-green-600">
+              {alerts.filter(a => a.status === "resolved").length}
+            </div>
           </CardContent>
         </Card>
       </div>
 
       {/* Filters */}
-      <Card className="bg-gradient-to-r from-gray-900/50 to-gray-800/50 border-gray-700/50">
+      <Card>
         <CardHeader>
-          <CardTitle className="text-white flex items-center space-x-2">
-            <Filter className="h-5 w-5 text-blue-400" />
-            <span>Filter Alerts</span>
-          </CardTitle>
+          <CardTitle className="text-lg">Filter Alerts</CardTitle>
         </CardHeader>
-        <CardContent className="flex space-x-4">
-          <div className="flex-1">
-            <select
-              value={priorityFilter}
-              onChange={(e) => setPriorityFilter(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-600 text-white p-2 rounded-md"
-            >
-              <option value="all">All Priorities</option>
-              <option value="critical">Critical</option>
-              <option value="high">High</option>
-              <option value="medium">Medium</option>
-              <option value="low">Low</option>
-            </select>
-          </div>
-          <div className="flex-1">
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-600 text-white p-2 rounded-md"
-            >
-              <option value="all">All Status</option>
-              <option value="active">Active</option>
-              <option value="resolved">Resolved</option>
-              <option value="acknowledged">Acknowledged</option>
-            </select>
+        <CardContent>
+          <div className="flex flex-col md:flex-row gap-4">
+            <div className="flex-1">
+              <div className="relative">
+                <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search employees, codes, lines, operations..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-10"
+                />
+              </div>
+            </div>
+            
+            <Select value={priorityFilter} onValueChange={setPriorityFilter}>
+              <SelectTrigger className="w-[160px]">
+                <SelectValue placeholder="Priority" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Priorities</SelectItem>
+                <SelectItem value="HIGH">High</SelectItem>
+                <SelectItem value="MEDIUM">Medium</SelectItem>
+                <SelectItem value="LOW">Low</SelectItem>
+              </SelectContent>
+            </Select>
+            
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="w-[160px]">
+                <SelectValue>Status</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Status</SelectItem>
+                <SelectItem value="unread">Unread</SelectItem>
+                <SelectItem value="read">Read</SelectItem>
+                <SelectItem value="resolved">Resolved</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </CardContent>
       </Card>
 
-      {/* Alert List */}
-      <Card className="bg-gradient-to-br from-gray-900/50 to-gray-800/50 border-gray-700/50">
+      {/* Alerts List */}
+      <Card>
         <CardHeader>
-          <CardTitle className="text-white flex items-center justify-between">
-            <div className="flex items-center space-x-2">
-              <AlertTriangle className="h-5 w-5 text-red-400" />
-              <span>Active Alerts</span>
-            </div>
-            <Badge variant="destructive" className="animate-pulse">
-              {filteredAlerts.length} alerts
-            </Badge>
+          <CardTitle className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5" />
+            Active Alerts ({filteredAlerts.length})
           </CardTitle>
-          <CardDescription>Real-time production alerts and notifications</CardDescription>
         </CardHeader>
         <CardContent>
-          {filteredAlerts.length === 0 ? (
-            <div className="text-center py-8 text-gray-400">
-              <CheckCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>No alerts matching current filters.</p>
-              <p className="text-sm">Production is running smoothly!</p>
-            </div>
-          ) : (
-            <div className="space-y-4 max-h-96 overflow-y-auto">
-              {filteredAlerts.map((alert) => (
+          <div className="space-y-4 max-h-[600px] overflow-y-auto">
+            {filteredAlerts.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <AlertTriangle className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                <p>No alerts match your current filters.</p>
+              </div>
+            ) : (
+              filteredAlerts.map((alert) => (
                 <div
                   key={alert.id}
-                  className={`alert-item p-4 rounded-lg border ${
-                    alert.priority === "critical"
-                      ? "border-red-500/50 bg-red-500/10"
-                      : alert.priority === "high"
-                      ? "border-orange-500/50 bg-orange-500/10"
-                      : alert.priority === "medium"
-                      ? "border-yellow-500/50 bg-yellow-500/10"
-                      : "border-green-500/50 bg-green-500/10"
+                  className={`alert-item p-4 border rounded-lg space-y-3 transition-all hover:shadow-md ${
+                    alert.status === "unread" ? "bg-muted/50 border-primary/20" : ""
                   }`}
                 >
-                  <div className="flex items-start space-x-3">
-                    <div className={`p-2 rounded-full ${getPriorityColor(alert.priority)}`}>
-                      {getPriorityIcon(alert.priority)}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between mb-2">
-                        <h4 className="font-semibold text-white truncate">{alert.title}</h4>
-                        <div className="flex items-center space-x-2 flex-shrink-0">
-                          <Badge className={`text-xs ${getPriorityColor(alert.priority)}`}>
-                            {String(alert.priority).toUpperCase()}
-                          </Badge>
-                          <span className="text-xs text-gray-400">
-                            {formatTime(alert.timestamp)}
-                          </span>
-                        </div>
+                  <div className="flex items-start justify-between">
+                    <div className="space-y-2 flex-1">
+                      <div className="flex items-center gap-2">
+                        <Badge variant={getPriorityColor(alert.priority)}>
+                          {alert.priority}
+                        </Badge>
+                        <Badge variant="outline" className="flex items-center gap-1">
+                          {getStatusIcon(alert.status)}
+                          {alert.status}
+                        </Badge>
                       </div>
-                      <p className="text-sm text-gray-300 mb-3">{alert.description}</p>
-
-                      {/* Alert Details */}
-                      <div className="flex flex-wrap gap-4 text-xs text-gray-400">
-                        {alert.location && (
-                          <div className="flex items-center space-x-1">
+                      
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 text-sm">
+                          <User className="h-4 w-4 text-muted-foreground" />
+                          <span className="font-medium">{alert.employee}</span>
+                          <span className="text-muted-foreground">({alert.employee_code})</span>
+                        </div>
+                        
+                        <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                          <div className="flex items-center gap-1">
                             <MapPin className="h-3 w-3" />
-                            <span>{alert.location}</span>
+                            {alert.unit} - {alert.floor} - {alert.line}
                           </div>
-                        )}
-                        {alert.operation && (
-                          <div className="flex items-center space-x-1">
+                          <div className="flex items-center gap-1">
                             <Wrench className="h-3 w-3" />
-                            <span>{alert.operation}</span>
+                            {alert.operation}
                           </div>
-                        )}
-                        {alert.efficiency !== undefined && (
-                          <div className="flex items-center space-x-1">
-                            <span>
-                              Efficiency: {alert.efficiency}% / {alert.target ?? "N/A"}%
-                            </span>
+                          <div className="flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            {formatTimestamp(alert.timestamp)}
                           </div>
-                        )}
-                        {alert.confidence !== undefined && (
-                          <div className="flex items-center space-x-1">
-                            <span>AI Confidence: {(alert.confidence * 100).toFixed(0)}%</span>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Efficiency Progress Bar */}
-                      {alert.efficiency !== undefined && (
-                        <div className="mt-3">
-                          <Progress value={alert.efficiency} className="h-2" />
                         </div>
-                      )}
-
-                      {/* Action Buttons */}
-                      <div className="flex space-x-2 mt-3">
-                        <Button size="sm" variant="outline" className="text-xs">
-                          Acknowledge
-                        </Button>
-                        <Button size="sm" variant="outline" className="text-xs">
-                          View Details
-                        </Button>
-                        {alert.type === "efficiency" && (
-                          <Button size="sm" variant="outline" className="text-xs">
-                            Send Notification
-                          </Button>
-                        )}
                       </div>
+                      
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-sm">
+                          <span>Efficiency: {alert.efficiency}%</span>
+                          <span>Target: {alert.target_efficiency}%</span>
+                        </div>
+                        <Progress 
+                          value={alert.efficiency} 
+                          className={`h-2 ${
+                            alert.efficiency < 70 ? "bg-destructive" : 
+                            alert.efficiency < 85 ? "bg-yellow-500" : 
+                            "bg-green-500"
+                          }`}
+                        />
+                        <div className="text-xs text-muted-foreground">
+                          Production: {alert.production}/{alert.target} units 
+                          ({((alert.production / alert.target) * 100).toFixed(1)}%)
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="flex flex-col gap-2 ml-4">
+                      {alert.status === "unread" && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => markAsRead(alert.id)}
+                          className="w-24"
+                        >
+                          <Eye className="h-3 w-3 mr-1" />
+                          Read
+                        </Button>
+                      )}
+                      {alert.status !== "resolved" && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => markAsResolved(alert.id)}
+                          className="w-24"
+                        >
+                          <CheckCircle className="h-3 w-3 mr-1" />
+                          Resolve
+                        </Button>
+                      )}
                     </div>
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
+              ))
+            )}
+          </div>
         </CardContent>
       </Card>
     </div>
   );
 }
+
+export default AlertsPanel;
