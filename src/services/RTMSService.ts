@@ -36,6 +36,46 @@ class RTMSService {
     }
   }
 
+  async getUnitCodes(): Promise<string[]> {
+    try {
+      const response = await rtmsRepository.getUnitCodes();
+      return response.data || [];
+    } catch (error) {
+      console.error('Error in RTMSService.getUnitCodes:', error);
+      return [];
+    }
+  }
+
+  async getFloorNames(unitCode: string): Promise<string[]> {
+    try {
+      const response = await rtmsRepository.getFloorNames(unitCode);
+      return response.data || [];
+    } catch (error) {
+      console.error('Error in RTMSService.getFloorNames:', error);
+      return [];
+    }
+  }
+
+  async getLineNames(unitCode: string, floorName: string): Promise<string[]> {
+    try {
+      const response = await rtmsRepository.getLineNames(unitCode, floorName);
+      return response.data || [];
+    } catch (error) {
+      console.error('Error in RTMSService.getLineNames:', error);
+      return [];
+    }
+  }
+
+  async getOperationsByLine(unitCode: string, floorName: string, lineName: string): Promise<string[]> {
+    try {
+      const response = await rtmsRepository.getOperationsByLine(unitCode, floorName, lineName);
+      return response.data || [];
+    } catch (error) {
+      console.error('Error in RTMSService.getOperationsByLine:', error);
+      return [];
+    }
+  }
+
   async getAlerts(): Promise<Alert[]> {
     try {
       const response = await rtmsRepository.getAlerts();
