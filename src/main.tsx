@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import { FilterContextProvider } from "./contexts/FilterContext";
 import { AIContextProvider } from "./contexts/AIContext";  // ✅ import AI provider
+import "./index.css" 
 
 const container = document.getElementById("root")!;
 createRoot(container).render(
