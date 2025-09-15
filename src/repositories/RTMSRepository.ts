@@ -97,6 +97,50 @@ class RTMSRepository {
       throw new Error('Failed to fetch system status');
     }
   }
+  async getUnitCodes(): Promise<string[]> {
+  try {
+    const response = await fetch(`${this.baseUrl}/api/rtms/units`);
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch units:", error);
+    throw new Error("Failed to fetch units");
+  }
+}
+
+async getFloorNames(unit: string): Promise<string[]> {
+  try {
+    const response = await fetch(`${this.baseUrl}/api/rtms/floors?unit=${unit}`);
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch floors:", error);
+    throw new Error("Failed to fetch floors");
+  }
+}
+
+async getLineNames(unit: string, floor: string): Promise<string[]> {
+  try {
+    const response = await fetch(`${this.baseUrl}/api/rtms/lines?unit=${unit}&floor=${floor}`);
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch lines:", error);
+    throw new Error("Failed to fetch lines");
+  }
+}
+
+async getOperationsByLine(unit: string, floor: string, line: string): Promise<string[]> {
+  try {
+    const response = await fetch(`${this.baseUrl}/api/rtms/operations?unit=${unit}&floor=${floor}&line=${line}`);
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch operations:", error);
+    throw new Error("Failed to fetch operations");
+  }
+}
+
 }
 
 export const rtmsRepository = new RTMSRepository();

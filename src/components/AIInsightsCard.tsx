@@ -100,21 +100,21 @@ export const AIInsightsCard: React.FC<AIInsightsCardProps> = ({ insights }) => {
             <div>
               <h4 className="font-medium text-sm mb-2">Best Performing</h4>
               <div className="space-y-1">
-                {insights.performance_analysis.best_performing_line && (
+                {insights.performanceAnalysis.bestPerformingLine && (
                   <div className="text-sm">
                     <span className="text-muted-foreground">Line:</span>{' '}
                     <span className="font-medium text-green-600">
-                      {insights.performance_analysis.best_performing_line[0]} 
-                      ({insights.performance_analysis.best_performing_line[1].toFixed(1)}%)
+                      {insights.performanceAnalysis.bestPerformingLine[0]} 
+                      ({insights.performanceAnalysis.bestPerformingLine[1].toFixed(1)}%)
                     </span>
                   </div>
                 )}
-                {insights.performance_analysis.best_performing_operation && (
+                {insights.performanceAnalysis.bestPerformingOperation && (
                   <div className="text-sm">
                     <span className="text-muted-foreground">Operation:</span>{' '}
                     <span className="font-medium text-green-600">
-                      {insights.performance_analysis.best_performing_operation[0]}
-                      ({insights.performance_analysis.best_performing_operation[1].toFixed(1)}%)
+                      {insights.performanceAnalysis.bestPerformingOperation[0]}
+                      ({insights.performanceAnalysis.bestPerformingOperation[1].toFixed(1)}%)
                     </span>
                   </div>
                 )}
@@ -124,21 +124,21 @@ export const AIInsightsCard: React.FC<AIInsightsCardProps> = ({ insights }) => {
             <div>
               <h4 className="font-medium text-sm mb-2">Needs Attention</h4>
               <div className="space-y-1">
-                {insights.performance_analysis.worst_performing_line && (
+                {insights.performanceAnalysis.worstPerformingLine && (
                   <div className="text-sm">
                     <span className="text-muted-foreground">Line:</span>{' '}
                     <span className="font-medium text-red-600">
-                      {insights.performance_analysis.worst_performing_line[0]}
-                      ({insights.performance_analysis.worst_performing_line[1].toFixed(1)}%)
+                      {insights.performanceAnalysis.worstPerformingLine[0]}
+                      ({insights.performanceAnalysis.worstPerformingLine[1].toFixed(1)}%)
                     </span>
                   </div>
                 )}
-                {insights.performance_analysis.worst_performing_operation && (
+                {insights.performanceAnalysis.worstPerformingOperation && (
                   <div className="text-sm">
                     <span className="text-muted-foreground">Operation:</span>{' '}
                     <span className="font-medium text-red-600">
-                      {insights.performance_analysis.worst_performing_operation[0]}
-                      ({insights.performance_analysis.worst_performing_operation[1].toFixed(1)}%)
+                      {insights.performanceAnalysis.worstPerformingOperation[0]}
+                      ({insights.performanceAnalysis.worstPerformingOperation[1].toFixed(1)}%)
                     </span>
                   </div>
                 )}

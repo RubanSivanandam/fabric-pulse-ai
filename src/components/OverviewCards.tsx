@@ -24,18 +24,18 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({ data }) => {
     return { status: 'Critical', color: 'bg-red-100 text-red-800' };
   };
 
-  const efficiencyStatus = getEfficiencyStatus(data.overall_efficiency);
+  const efficiencyStatus = getEfficiencyStatus(data.overallEfficiency);
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <CardTitle className="text-sm font-medium">Overall Efficiency</CardTitle>
-          {getEfficiencyIcon(data.overall_efficiency)}
+          {getEfficiencyIcon(data.overallEfficiency)}
         </CardHeader>
         <CardContent>
           <div className="text-2xl font-bold text-blue-600">
-            {data.overall_efficiency.toFixed(1)}%
+            {data.overallEfficiency.toFixed(1)}%
           </div>
           <Badge className={`mt-2 ${efficiencyStatus.color}`}>
             {efficiencyStatus.status}
@@ -50,10 +50,10 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({ data }) => {
         </CardHeader>
         <CardContent>
           <div className="text-2xl font-bold text-green-600">
-            {data.total_production.toLocaleString()}
+            {data.totalProduction.toLocaleString()}
           </div>
           <p className="text-xs text-muted-foreground">
-            Target: {data.total_target.toLocaleString()}
+            Target: {data.totalTarget.toLocaleString()}
           </p>
         </CardContent>
       </Card>
@@ -68,7 +68,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({ data }) => {
             {data.operators.length}
           </div>
           <p className="text-xs text-muted-foreground">
-            {data.records_analyzed} records analyzed
+            {data.recordsAnalyzed} records analyzed
           </p>
         </CardContent>
       </Card>

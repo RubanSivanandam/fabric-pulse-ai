@@ -64,21 +64,21 @@ export const AIInsightsDashboard: React.FC<AIInsightsDashboardProps> = ({
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {insights.performance_analysis.best_performing_line && (
+            {insights.performanceAnalysis.bestPerformingLine && (
               <div className="flex justify-between items-center p-3 bg-green-50 rounded">
                 <span className="font-medium">Best Line</span>
                 <Badge className="bg-green-500">
-                  {insights.performance_analysis.best_performing_line[0]} 
-                  ({insights.performance_analysis.best_performing_line[1].toFixed(1)}%)
+                  {insights.performanceAnalysis.bestPerformingLine[0]} 
+                  ({insights.performanceAnalysis.bestPerformingLine[1].toFixed(1)}%)
                 </Badge>
               </div>
             )}
-            {insights.performance_analysis.best_performing_operation && (
+            {insights.performanceAnalysis.bestPerformingOperation && (
               <div className="flex justify-between items-center p-3 bg-green-50 rounded">
                 <span className="font-medium">Best Operation</span>
                 <Badge className="bg-green-500">
-                  {insights.performance_analysis.best_performing_operation[0]}
-                  ({insights.performance_analysis.best_performing_operation[1].toFixed(1)}%)
+                  {insights.performanceAnalysis.bestPerformingOperation[0]}
+                  ({insights.performanceAnalysis.bestPerformingOperation[1].toFixed(1)}%)
                 </Badge>
               </div>
             )}
@@ -93,21 +93,21 @@ export const AIInsightsDashboard: React.FC<AIInsightsDashboardProps> = ({
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {insights.performance_analysis.worst_performing_line && (
+            {insights.performanceAnalysis.worstPerformingLine && (
               <div className="flex justify-between items-center p-3 bg-red-50 rounded">
                 <span className="font-medium">Focus Line</span>
                 <Badge className="bg-red-500">
-                  {insights.performance_analysis.worst_performing_line[0]}
-                  ({insights.performance_analysis.worst_performing_line[1].toFixed(1)}%)
+                  {insights.performanceAnalysis.worstPerformingLine[0]}
+                  ({insights.performanceAnalysis.worstPerformingLine[1].toFixed(1)}%)
                 </Badge>
               </div>
             )}
-            {insights.performance_analysis.worst_performing_operation && (
+            {insights.performanceAnalysis.worstPerformingOperation && (
               <div className="flex justify-between items-center p-3 bg-red-50 rounded">
                 <span className="font-medium">Focus Operation</span>
                 <Badge className="bg-red-500">
-                  {insights.performance_analysis.worst_performing_operation[0]}
-                  ({insights.performance_analysis.worst_performing_operation[1].toFixed(1)}%)
+                  {insights.performanceAnalysis.worstPerformingOperation[0]}
+                  ({insights.performanceAnalysis.worstPerformingOperation[1].toFixed(1)}%)
                 </Badge>
               </div>
             )}

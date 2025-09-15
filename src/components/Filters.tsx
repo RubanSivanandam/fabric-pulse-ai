@@ -1,10 +1,16 @@
-import React from 'react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '../components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Filter, X, Search } from 'lucide-react';
+import React from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "../components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Filter, X, Search } from "lucide-react";
 
 interface FiltersProps {
   operations: string[];
@@ -22,16 +28,16 @@ export const Filters: React.FC<FiltersProps> = ({
   operations,
   filters,
   onFiltersChange,
-  onClearFilters
+  onClearFilters,
 }) => {
   const handleFilterChange = (key: string, value: string) => {
     onFiltersChange({
       ...filters,
-      [key]: value || undefined
+      [key]: value || undefined,
     });
   };
 
-  const hasActiveFilters = Object.values(filters).some(value => value);
+  const hasActiveFilters = Object.values(filters).some((value) => value);
 
   return (
     <Card className="mb-6">
@@ -48,8 +54,8 @@ export const Filters: React.FC<FiltersProps> = ({
             <Input
               id="unit_code"
               placeholder="e.g., D15-2"
-              value={filters.unit_code || ''}
-              onChange={(e) => handleFilterChange('unit_code', e.target.value)}
+              value={filters.unit_code || ""}
+              onChange={(e) => handleFilterChange("unit_code", e.target.value)}
             />
           </div>
 
@@ -58,8 +64,8 @@ export const Filters: React.FC<FiltersProps> = ({
             <Input
               id="floor_name"
               placeholder="e.g., FLOOR-2"
-              value={filters.floor_name || ''}
-              onChange={(e) => handleFilterChange('floor_name', e.target.value)}
+              value={filters.floor_name || ""}
+              onChange={(e) => handleFilterChange("floor_name", e.target.value)}
             />
           </div>
 
@@ -68,29 +74,25 @@ export const Filters: React.FC<FiltersProps> = ({
             <Input
               id="line_name"
               placeholder="e.g., S1-1"
-              value={filters.line_name || ''}
-              onChange={(e) => handleFilterChange('line_name', e.target.value)}
+              value={filters.line_name || ""}
+              onChange={(e) => handleFilterChange("line_name", e.target.value)}
             />
           </div>
 
           <div className="space-y-2">
             <Label htmlFor="operation">Operation</Label>
-            <Select
-              value={filters.operation || ''}
-              onValueChange={(value) => handleFilterChange('operation', value)}
+            <select
+              value={filters.operation || ""}
+              onChange={(e) => handleFilterChange("operation", e.target.value)}
+              className="w-full bg-gray-800 border border-gray-600 text-white p-2 rounded-md"
             >
-              <SelectTrigger>
-                <SelectValue placeholder="Select operation" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="">All Operations</SelectItem>
-                {operations.map((operation) => (
-                  <SelectItem key={operation} value={operation}>
-                    {operation}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              <option value="">All Operations</option>
+              {operations.map((operation) => (
+                <option key={operation} value={operation}>
+                  {operation}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 

@@ -1,27 +1,62 @@
-// API Response Types
-export interface Operator {
-  emp_name: string;
-  emp_code: string;
-  line_name: string;
-  unit_code: string;
-  floor_name: string;
+// Backend API types (snake_case)
+export interface RTMSProductionDataAPI {
+  LineName: string;
+  EmpCode: string;
+  EmpName: string;
+  DeviceID: string;
+  StyleNo: string;
+  OrderNo: string;
+  Operation: string;
+  SAM: number;
+  Eff100: number;
+  Eff75?: number;
+  ProdnPcs: number;
+  EffPer: number;
+  OperSeq: number;
+  UsedMin: number;
+  TranDate: string;
+  UnitCode: string;
+  PartName: string;
+  FloorName: string;
+  ReptType: string;
+  PartSeq: number;
+  EffPer100: number;
+  EffPer75: number;
+  NewOperSeq: string;
+  BuyerCode: string;
+  ISFinPart: string;
+  ISFinOper: string;
+  IsRedFlag: number;
+}
+
+// Frontend UI types (camelCase)
+export interface OperatorData {
+  empName: string;
+  empCode: string;
+  lineName: string;
+  unitCode: string;
+  floorName: string;
   operation: string;
-  new_oper_seq: string;
-  device_id: string;
+  newOperSeq: string;
+  deviceId: string;
   efficiency: number;
   production: number;
   target: number;
   status: 'excellent' | 'good' | 'needs_improvement' | 'critical';
-  is_top_performer: boolean;
+  isTopPerformer: boolean;
+  relativeEfficiency?: number;
 }
+
+// Legacy/compatibility aliases
+export type Operator = OperatorData;
 
 export interface AIInsights {
   summary: string;
-  performance_analysis: {
-    best_performing_line: [string, number] | null;
-    worst_performing_line: [string, number] | null;
-    best_performing_operation: [string, number] | null;
-    worst_performing_operation: [string, number] | null;
+  performanceAnalysis: {
+    bestPerformingLine: [string, number] | null;
+    worstPerformingLine: [string, number] | null;
+    bestPerformingOperation: [string, number] | null;
+    worstPerformingOperation: [string, number] | null;
   };
   recommendations: string[];
   predictions: {
@@ -31,88 +66,103 @@ export interface AIInsights {
   };
 }
 
-export interface ProductionAnalysis {
+export interface AnalysisResponse {
   status: string;
-  overall_efficiency: number;
-  total_production: number;
-  total_target: number;
-  operators: Operator[];
-  underperformers: Operator[];
-  ai_insights: AIInsights;
-  whatsapp_alerts_needed: boolean;
-  whatsapp_disabled: boolean;
-  analysis_timestamp: string;
-  records_analyzed: number;
-  data_date: string;
-}
-
-export interface APIResponse {
-  status: string;
-  data: ProductionAnalysis;
-  filters_applied?: {
-    unit_code?: string;
-    floor_name?: string;
-    line_name?: string;
+  data: {
+    overallEfficiency: number;
+    totalProduction: number;
+    totalTarget: number;
+    operators: OperatorData[];
+    underperformers: OperatorData[];
+    aiInsights: AIInsights;
+    whatsappAlertsNeeded: boolean;
+    whatsappDisabled: boolean;
+    analysisTimestamp: string;
+    recordsAnalyzed: number;
+    dataDate: string;
+  };
+  filtersApplied?: {
+    unitCode?: string;
+    floorName?: string;
+    lineName?: string;
     operation?: string;
   };
 }
 
+// Alias for repository return type
+export type APIResponse = AnalysisResponse;
+
+export interface FilterOptions {
+  units: string[];
+  floors: string[];
+  lines: string[];
+  operations: string[];
+}
+
+export interface AIRequest {
+  text?: string;
+  length?: 'short' | 'medium' | 'long';
+  context?: string;
+  query?: string;
+  prompt?: string;
+  maxTokens?: number;
+  stream?: boolean;
+}
+
+export interface AIResponse {
+  summary?: string;
+  suggestions?: Array<{
+    id: string;
+    label: string;
+    confidence: number;
+  }>;
+  text?: string;
+  processingTime?: number;
+}
+
+export interface FilterState {
+  unitCode: string | null;
+  floorName: string | null;
+  lineName: string | null;
+  operation: string | null;
+}
+
+// Add missing types for repository
 export interface ServiceStatus {
-  service: string;
-  version: string;
   status: string;
-  ai_enabled: boolean;
-  whatsapp_enabled: boolean;
-  whatsapp_disabled: boolean;
-  database_connected: boolean;
-  bot_name: string;
-  data_date: string;
-  features: string[];
-  last_fetch: string | null;
   timestamp: string;
 }
 
 export interface OperationsResponse {
-  status: string;
-  data: string[];
-  count: number;
-  data_date: string;
-  timestamp: string;
+  operations: string[];
 }
 
 export interface Alert {
   id: string;
-  employee: string;
-  employee_code: string;
-  unit: string;
-  floor: string;
-  line: string;
-  operation: string;
-  current_efficiency: number;
-  target_efficiency: number;
-  gap: number;
-  priority: 'HIGH' | 'MEDIUM';
-  production: number;
-  target: number;
+  type: string;
+  priority: 'critical' | 'high' | 'medium' | 'low';
+  title: string;
+  description: string;
   timestamp: string;
+  confidence?: number;
+  location?: string;
+  operation?: string;
+  efficiency?: number;
+  target?: number;
+  status: 'active' | 'resolved' | 'acknowledged';
 }
 
-// ✅ New interface for visualization layer
-export interface OperatorEfficiency {
-  empName: string;
-  empCode: string;
-  lineName: string;
-  unitCode: string;
-  floorName: string;
-  operation: string;
-  efficiency: number;
-  production: number;
-  target: number;
-  status: 'excellent' | 'good' | 'needs_improvement' | 'critical' | 'unknown';
-  isTopPerformer: boolean;
-
-  // extra fields visualization may use
-  newOperSeq?: string;
-  deviceId?: string;
-  relativeEfficiency?: number;
+export interface ProductionAnalysis {
+  overallEfficiency: number;
+  totalProduction: number;
+  totalTarget: number;
+  operators: OperatorData[];
+  underperformers: OperatorData[];
+  aiInsights: AIInsights;
+  whatsappAlertsNeeded: boolean;
+  whatsappDisabled: boolean;
+  analysisTimestamp: string;
+  recordsAnalyzed: number;
+  dataDate: string;
 }
+

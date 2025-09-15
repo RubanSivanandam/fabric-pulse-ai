@@ -53,20 +53,20 @@ export const OperatorTable: React.FC<OperatorTableProps> = ({
             </TableHeader>
             <TableBody>
               {operators.map((operator, index) => (
-                <TableRow key={`${operator.emp_code}-${operator.new_oper_seq}-${index}`}>
+                <TableRow key={`${operator.empCode}-${operator.newOperSeq}-${index}`}>
                   <TableCell className="font-medium">
-                    {operator.emp_name}
-                    {operator.is_top_performer && (
+                    {operator.empName}
+                    {operator.isTopPerformer && (
                       <Badge className="ml-2 bg-yellow-100 text-yellow-800">
                         Top Performer
                       </Badge>
                     )}
                   </TableCell>
-                  <TableCell>{operator.emp_code}</TableCell>
-                  <TableCell>{operator.unit_code}</TableCell>
-                  <TableCell>{operator.floor_name}</TableCell>
-                  <TableCell>{operator.line_name}</TableCell>
-                  <TableCell>{operator.new_oper_seq}</TableCell>
+                  <TableCell>{operator.empCode}</TableCell>
+                  <TableCell>{operator.unitCode}</TableCell>
+                  <TableCell>{operator.floorName}</TableCell>
+                  <TableCell>{operator.lineName}</TableCell>
+                  <TableCell>{operator.newOperSeq}</TableCell>
                   <TableCell>{operator.production}</TableCell>
                   <TableCell>{operator.target}</TableCell>
                   <TableCell>
