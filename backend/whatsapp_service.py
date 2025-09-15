@@ -273,3 +273,4 @@ class ProductionReadyWhatsAppService:
 
 # Global service instance
 whatsapp_service = ProductionReadyWhatsAppService()
+

@@ -1,4 +1,3 @@
-// src/components/dashboard/MainDashboard.tsx
 import React from 'react';
 import { useRTMSData } from '../hooks/useRTMSData';
 import { OperationFilter } from '../components/filters/OperationFilter';
@@ -7,31 +6,34 @@ import { AIInsightsDashboard } from './AIInsightsDashboard';
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { RefreshCw, Users, TrendingUp, AlertCircle } from 'lucide-react';
 import { Button } from "@/components/ui/button";
+import { OperatorEfficiency } from "@/types";
+
 
 export const MainDashboard: React.FC = () => {
-  const { 
-    operators, 
-    aiInsights, 
-    loading, 
-    error, 
-    filters, 
-    updateFilters, 
-    refetch 
+  const {
+    operators = [],
+    aiInsights,
+    loading,
+    error,
+    filters,
+    updateFilters,
+    refetch,
   } = useRTMSData();
 
   const stats = React.useMemo(() => {
     const totalOperators = operators.length;
     const excellentOperators = operators.filter(op => op.status === 'excellent').length;
     const criticalOperators = operators.filter(op => op.status === 'critical').length;
-    const avgEfficiency = operators.length > 0 
-      ? operators.reduce((sum, op) => sum + op.efficiency, 0) / operators.length 
-      : 0;
+    const avgEfficiency =
+      operators.length > 0
+        ? operators.reduce((sum, op) => sum + (op.efficiency ?? 0), 0) / operators.length
+        : 0;
 
     return {
       totalOperators,
       excellentOperators,
       criticalOperators,
-      avgEfficiency
+      avgEfficiency,
     };
   }, [operators]);
 
@@ -60,13 +62,11 @@ export const MainDashboard: React.FC = () => {
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">
-            RTMS Dashboard
-          </h1>
+          <h1 className="text-3xl font-bold text-gray-900">RTMS Dashboard</h1>
           <p className="text-gray-600">AI-Powered Real-Time Production Monitoring</p>
         </div>
-        <Button 
-          onClick={refetch} 
+        <Button
+          onClick={refetch}
           disabled={loading}
           className="flex items-center gap-2"
         >
@@ -86,7 +86,7 @@ export const MainDashboard: React.FC = () => {
             <div className="text-2xl font-bold">{stats.totalOperators}</div>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Excellent Performers</CardTitle>
@@ -96,7 +96,7 @@ export const MainDashboard: React.FC = () => {
             <div className="text-2xl font-bold text-green-600">{stats.excellentOperators}</div>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Need Attention</CardTitle>
@@ -106,7 +106,7 @@ export const MainDashboard: React.FC = () => {
             <div className="text-2xl font-bold text-red-600">{stats.criticalOperators}</div>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Avg Efficiency</CardTitle>
@@ -121,9 +121,7 @@ export const MainDashboard: React.FC = () => {
       </div>
 
       {/* AI Insights */}
-      {aiInsights && (
-        <AIInsightsDashboard insights={aiInsights} />
-      )}
+      {aiInsights && <AIInsightsDashboard insights={aiInsights} />}
 
       {/* Filters */}
       <Card>
@@ -136,7 +134,6 @@ export const MainDashboard: React.FC = () => {
               selectedOperation={filters.operation}
               onOperationChange={(operation) => updateFilters({ operation })}
             />
-            {/* Add other filters as needed */}
           </div>
         </CardContent>
       </Card>
@@ -156,7 +153,21 @@ export const MainDashboard: React.FC = () => {
               <span className="ml-2">Loading efficiency data...</span>
             </div>
           ) : (
-            <OperatorEfficiencyVisualization operators={operators} />
+            <OperatorEfficiencyVisualization
+              operators={operators.map(op => ({
+                empName: op.emp_name,
+                empCode: op.emp_code,
+                lineName: op.line_name,
+                unitCode: op.unit_code,
+                floorName: op.floor_name,
+                operation: op.new_oper_seq,
+                efficiency: op.efficiency,
+                production: op.production,
+                target: op.target,
+                status: op.status ?? "unknown",
+                isTopPerformer: op.is_top_performer ?? false,
+              })) as OperatorEfficiency[]}
+            />
           )}
         </CardContent>
       </Card>

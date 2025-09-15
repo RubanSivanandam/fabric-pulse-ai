@@ -1,95 +1,105 @@
-import { RTMSRepository } from '../repositories/RTMSRepository';
-import { OperatorEfficiency, FilterState, AIInsights } from '../types';
+import { rtmsRepository } from '@/repositories/RTMSRepository';
+import { Operator, ProductionAnalysis, ServiceStatus, Alert } from '@/types/rtms';
 
-export class RTMSService {
-  private rtmsRepository: RTMSRepository;
-
-  constructor() {
-    this.rtmsRepository = new RTMSRepository();
-  }
-
-  async getOperatorEfficiencies(filters?: FilterState): Promise<OperatorEfficiency[]> {
+class RTMSService {
+  async getOperatorEfficiencies(filters?: {
+    unit_code?: string;
+    floor_name?: string;
+    line_name?: string;
+    operation?: string;
+  }): Promise<ProductionAnalysis> {
     try {
-      const data = await this.rtmsRepository.getProductionData(filters);
-      return this.processOperatorEfficiencies(data);
+      const response = await rtmsRepository.getProductionData(filters);
+      return response.data;
     } catch (error) {
       console.error('Error in RTMSService.getOperatorEfficiencies:', error);
-      return [];
+      throw error;
     }
   }
 
-  private processOperatorEfficiencies(data: any): OperatorEfficiency[] {
-    const operators: OperatorEfficiency[] = [];
-    
-    // Process hierarchical data to extract operators
-    Object.values(data).forEach((unit: any) => {
-      Object.values(unit.floors || {}).forEach((floor: any) => {
-        Object.values(floor.lines || {}).forEach((line: any) => {
-          Object.values(line.styles || {}).forEach((style: any) => {
-            Object.values(style.parts || {}).forEach((part: any) => {
-              Object.values(part.operations || {}).forEach((operation: any) => {
-                Object.values(operation.devices || {}).forEach((device: any) => {
-                  Object.values(device.employees || {}).forEach((emp: any) => {
-                    operators.push({
-                      empName: emp.name,
-                      empCode: emp.code,
-                      lineName: line.name,
-                      unitCode: unit.name,
-                      floorName: floor.name,
-                      operation: emp.operation,
-                      newOperSeq: operation.name,
-                      deviceId: device.name,
-                      efficiency: emp.efficiency,
-                      production: emp.production,
-                      target: emp.target,
-                      status: this.getEfficiencyStatus(emp.efficiency),
-                      isTopPerformer: emp.efficiency >= 100,
-                      relativeEfficiency: this.calculateRelativeEfficiency(emp.efficiency, operation.employees)
-                    });
-                  });
-                });
-              });
-            });
-          });
-        });
-      });
-    });
-
-    return operators;
-  }
-
-  private getEfficiencyStatus(efficiency: number): 'excellent' | 'good' | 'needs_improvement' | 'critical' {
-    if (efficiency >= 100) return 'excellent';
-    if (efficiency >= 85) return 'good';
-    if (efficiency >= 70) return 'needs_improvement';
-    return 'critical';
-  }
-
-  private calculateRelativeEfficiency(efficiency: number, operationEmployees: any): number {
-    const efficiencies = Object.values(operationEmployees).map((emp: any) => emp.efficiency);
-    const maxEfficiency = Math.max(...efficiencies);
-    return maxEfficiency > 0 ? (efficiency / maxEfficiency) * 100 : 0;
-  }
-
-  async getAIInsights(): Promise<AIInsights> {
+  async getServiceStatus(): Promise<ServiceStatus> {
     try {
-      return await this.rtmsRepository.getAIAnalysis();
+      return await rtmsRepository.getServiceStatus();
     } catch (error) {
-      console.error('Error fetching AI insights:', error);
-      return {
-        summary: "AI analysis unavailable",
-        performance_analysis: {
-          best_performing_line: null,
-          worst_performing_line: null,
-          best_performing_operation: null,
-          worst_performing_operation: null
-        },
-        recommendations: []
-      };
+      console.error('Error in RTMSService.getServiceStatus:', error);
+      throw error;
     }
   }
 
   async getOperations(): Promise<string[]> {
-    return this.rtmsRepository.getOperations();
+    try {
+      const response = await rtmsRepository.getOperations();
+      return response.data;
+    } catch (error) {
+      console.error('Error in RTMSService.getOperations:', error);
+      throw error;
+    }
+  }
+
+  async getAlerts(): Promise<Alert[]> {
+    try {
+      const response = await rtmsRepository.getAlerts();
+      return response.alerts;
+    } catch (error) {
+      console.error('Error in RTMSService.getAlerts:', error);
+      throw error;
+    }
+  }
+
+  async testWhatsApp(): Promise<{ status: string; message: string }> {
+    try {
+      return await rtmsRepository.testWhatsApp();
+    } catch (error) {
+      console.error('Error in RTMSService.testWhatsApp:', error);
+      throw error;
+    }
+  }
+
+  async getSystemStatus(): Promise<any> {
+    try {
+      return await rtmsRepository.getSystemStatus();
+    } catch (error) {
+      console.error('Error in RTMSService.getSystemStatus:', error);
+      throw error;
+    }
+  }
+
+  getEfficiencyColor(efficiency: number): string {
+    if (efficiency >= 100) return 'text-green-600';
+    if (efficiency >= 85) return 'text-blue-600';
+    if (efficiency >= 70) return 'text-orange-600';
+    return 'text-red-600';
+  }
+
+  getEfficiencyBadgeColor(status: string): string {
+    switch (status) {
+      case 'excellent':
+        return 'bg-green-100 text-green-800 border-green-300';
+      case 'good':
+        return 'bg-blue-100 text-blue-800 border-blue-300';
+      case 'needs_improvement':
+        return 'bg-orange-100 text-orange-800 border-orange-300';
+      case 'critical':
+        return 'bg-red-100 text-red-800 border-red-300';
+      default:
+        return 'bg-gray-100 text-gray-800 border-gray-300';
+    }
+  }
+
+  formatEfficiencyStatus(status: string): string {
+    switch (status) {
+      case 'excellent':
+        return 'Excellent';
+      case 'good':
+        return 'Good';
+      case 'needs_improvement':
+        return 'Needs Improvement';
+      case 'critical':
+        return 'Critical';
+      default:
+        return 'Unknown';
+    }
   }
 }
+
+export const rtmsService = new RTMSService();

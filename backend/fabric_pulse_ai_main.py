@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Enhanced RTMS Backend - Production Ready
 100% working implementation with Twilio integration and clean architecture
@@ -723,6 +722,131 @@ async def get_system_status():
         },
         "timestamp": datetime.now().isoformat()
     }
+
+
+
+# ============================================================
+# AI endpoints: Ollama local proxy (llama-3.2:3b)
+# ============================================================
+from fastapi import APIRouter, Request, Header, HTTPException
+from fastapi.responses import StreamingResponse
+from typing import Optional
+
+AI_API_KEY = os.getenv("AI_API_KEY", "devtoken123")
+
+# Simple in-memory rate limiter (dev-only)
+_RATE_LIMIT: Dict[str, Dict[str, int]] = {}
+_RATE_LIMIT_WINDOW_SECONDS = 60
+_RATE_LIMIT_MAX_PER_WINDOW = 30
+
+def _rate_limited(ip: str) -> bool:
+    now = int(time.time())
+    bucket = _RATE_LIMIT.setdefault(ip, {'ts': now, 'count': 0})
+    if now - bucket['ts'] > _RATE_LIMIT_WINDOW_SECONDS:
+        bucket['ts'] = now
+        bucket['count'] = 0
+    bucket['count'] += 1
+    return bucket['count'] > _RATE_LIMIT_MAX_PER_WINDOW
+
+async def _run_ollama_chat(prompt: str) -> str:
+    # Run ollama locally using subprocess and return the combined stdout.
+    # Requires 'ollama' CLI available in PATH and the model 'llama-3.2:3b' installed locally.
+    cmd = ["ollama", "run", "llama-3.2:3b", "--prompt", prompt]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"ollama failed: {stderr.decode(errors="ignore")}")
+    return stdout.decode(errors='ignore')
+
+def _validate_api_key(x_ai_client: Optional[str]):
+    if not x_ai_client or x_ai_client != AI_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing AI API key")
+
+router = APIRouter(prefix="/api/ai")
+
+@router.post("/summarize")
+async def summarize(request: Request, body: dict, x_ai_client: Optional[str] = Header(None)):
+    _validate_api_key(x_ai_client)
+    client_ip = request.client.host if request.client else "unknown"
+    if _rate_limited(client_ip):
+        return JSONResponse({"error": "rate limit exceeded"}, status_code=429)
+    text = body.get("text", "")[:10000]
+    length = body.get("length", "short")
+    if not text:
+        return JSONResponse({"error": "missing text"}, status_code=400)
+    prompt = f"Summarize the following text in {length} form:\n\n{text}\n\nSummary:"
+    try:
+        out = await _run_ollama_chat(prompt)
+        return {"summary": out.strip()}
+    except Exception as e:
+        logger.exception("AI summarize failed")
+        return JSONResponse({"error": "AI summarization failed", "details": str(e)}, status_code=500)
+
+@router.post("/suggest_ops")
+async def suggest_ops(request: Request, body: dict, x_ai_client: Optional[str] = Header(None)):
+    _validate_api_key(x_ai_client)
+    client_ip = request.client.host if request.client else "unknown"
+    if _rate_limited(client_ip):
+        return JSONResponse({"error": "rate limit exceeded"}, status_code=429)
+    context = body.get("context", "")[:8000]
+    query = body.get("query", "")[:2000]
+    prompt = f"Suggest operations for context:\n{context}\n\nQuery:\n{query}\n\nReturn JSON array of {{id,label,confidence}}."
+    try:
+        out = await _run_ollama_chat(prompt)
+        try:
+            suggestions = json.loads(out)
+        except Exception:
+            suggestions = [
+                {"id": f"sugg-{i}", "label": line.strip(), "confidence": 0.8}
+                for i, line in enumerate(out.splitlines())
+                if line.strip()
+            ]
+        return {"suggestions": suggestions}
+    except Exception as e:
+        logger.exception("AI suggest_ops failed")
+        return JSONResponse({"error": "AI suggestions failed", "details": str(e)}, status_code=500)
+
+@router.post("/completion")
+async def completion(request: Request, body: dict, x_ai_client: Optional[str] = Header(None)):
+    _validate_api_key(x_ai_client)
+    client_ip = request.client.host if request.client else "unknown"
+    if _rate_limited(client_ip):
+        return JSONResponse({"error": "rate limit exceeded"}, status_code=429)
+    prompt = body.get("prompt", "")[:10000]
+    if not prompt:
+        return JSONResponse({"error": "missing prompt"}, status_code=400)
+    stream = bool(body.get("stream", False))
+
+    async def gen():
+        cmd = ["ollama", "run", "llama-3.2:3b", "--prompt", prompt]
+        proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        try:
+            while True:
+                chunk = await proc.stdout.read(1024)
+                if not chunk:
+                    break
+                yield chunk
+            await proc.wait()
+        finally:
+            if proc.returncode != 0:
+                err = (await proc.stderr.read()).decode("utf-8", errors="ignore")
+                logger.error("ollama error: %s", err)
+
+    if stream:
+        return StreamingResponse(gen(), media_type="text/plain")
+    else:
+        try:
+            out = await _run_ollama_chat(prompt)
+            return {"text": out.strip()}
+        except Exception as e:
+            logger.exception("AI completion failed")
+            return JSONResponse({"error": "AI completion failed", "details": str(e)}, status_code=500)
+
+app.include_router(router)
 
 
 if __name__ == "__main__":

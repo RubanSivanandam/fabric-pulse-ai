@@ -1,59 +1,102 @@
-import { APIClient } from '../services/APIClient';
-import { RTMSProductionData, FilterState } from '../types';
+import { APIResponse, ServiceStatus, OperationsResponse, Alert } from '@/types/rtms';
 
-export class RTMSRepository {
-  private apiClient: APIClient;
+class RTMSRepository {
+  private baseUrl = 'http://localhost:8000';
 
-  constructor() {
-    this.apiClient = new APIClient();
+  async getServiceStatus(): Promise<ServiceStatus> {
+    try {
+      const response = await fetch(`${this.baseUrl}/`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      return await response.json();
+    } catch (error) {
+      console.error('Failed to fetch service status:', error);
+      throw new Error('Failed to fetch service status');
+    }
   }
 
-  async getProductionData(filters?: FilterState): Promise<RTMSProductionData[]> {
+  async getProductionData(filters?: {
+    unit_code?: string;
+    floor_name?: string;
+    line_name?: string;
+    operation?: string;
+  }): Promise<APIResponse> {
     try {
-      const queryParams = new URLSearchParams();
-      
-      if (filters?.unitCode) queryParams.append('unit_code', filters.unitCode);
-      if (filters?.floorName) queryParams.append('floor_name', filters.floorName);
-      if (filters?.lineName) queryParams.append('line_name', filters.lineName);
-      if (filters?.operation) queryParams.append('operation', filters.operation);
-      if (filters?.startDate) queryParams.append('start_date', filters.startDate);
-      if (filters?.endDate) queryParams.append('end_date', filters.endDate);
+      const params = new URLSearchParams();
+      if (filters?.unit_code) params.append('unit_code', filters.unit_code);
+      if (filters?.floor_name) params.append('floor_name', filters.floor_name);
+      if (filters?.line_name) params.append('line_name', filters.line_name);
+      if (filters?.operation) params.append('operation', filters.operation);
 
-      const response = await this.apiClient.get(`/api/rtms/analyze?${queryParams}`);
-      return response.data.hierarchy || [];
+      const url = `${this.baseUrl}/api/rtms/analyze${params.toString() ? `?${params.toString()}` : ''}`;
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      return data;
     } catch (error) {
       console.error('Failed to fetch production data:', error);
       throw new Error('Failed to fetch production data');
     }
   }
 
-  async getAIAnalysis(): Promise<any> {
+  async getOperations(): Promise<OperationsResponse> {
     try {
-      const response = await this.apiClient.get('/api/rtms/analyze');
-      return response.data.ai_analysis;
-    } catch (error) {
-      console.error('Failed to fetch AI analysis:', error);
-      throw new Error('Failed to fetch AI analysis');
-    }
-  }
-
-  async getOperations(): Promise<string[]> {
-    try {
-      const response = await this.apiClient.get('/api/rtms/operations');
-      return response.data || [];
+      const response = await fetch(`${this.baseUrl}/api/rtms/operations`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      return await response.json();
     } catch (error) {
       console.error('Failed to fetch operations:', error);
-      return [];
+      throw new Error('Failed to fetch operations');
     }
   }
 
-  async getEfficiencyAlerts(): Promise<any[]> {
+  async getAlerts(): Promise<{ alerts: Alert[]; count: number; whatsapp_disabled: boolean; data_date: string; timestamp: string }> {
     try {
-      const response = await this.apiClient.get('/api/rtms/alerts');
-      return response.data.alerts || [];
+      const response = await fetch(`${this.baseUrl}/api/rtms/alerts`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      return await response.json();
     } catch (error) {
       console.error('Failed to fetch alerts:', error);
-      return [];
+      throw new Error('Failed to fetch alerts');
+    }
+  }
+
+  async testWhatsApp(): Promise<{ status: string; message: string; timestamp: string }> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/rtms/test-whatsapp`, {
+        method: 'POST',
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      return await response.json();
+    } catch (error) {
+      console.error('Failed to test WhatsApp:', error);
+      throw new Error('Failed to test WhatsApp');
+    }
+  }
+
+  async getSystemStatus(): Promise<any> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/rtms/status`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      return await response.json();
+    } catch (error) {
+      console.error('Failed to fetch system status:', error);
+      throw new Error('Failed to fetch system status');
     }
   }
 }
+
+export const rtmsRepository = new RTMSRepository();

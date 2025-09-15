@@ -1,36 +1,31 @@
-// src/hooks/useRTMSData.ts
-import { useState, useEffect, useCallback } from 'react';
-import { RTMSService } from '../services/RTMSService';
-import { OperatorEfficiency, FilterState, AIInsights } from '../types';
+import { useState, useEffect, useCallback } from "react";
+import { rtmsService } from "../services/RTMSService";
+import { Operator, ProductionAnalysis } from "@/types/rtms";
 
-export const useRTMSData = () => {
-  const [operators, setOperators] = useState<OperatorEfficiency[]>([]);
-  const [aiInsights, setAIInsights] = useState<AIInsights | null>(null);
-  const [loading, setLoading] = useState(true);
+interface Filters {
+  unit_code?: string;
+  floor_name?: string;
+  line_name?: string;
+  operation?: string;
+}
+
+export function useRTMSData() {
+  const [operators, setOperators] = useState<Operator[]>([]); // ✅ always array
+  const [aiInsights, setAIInsights] = useState<any | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-  const [filters, setFilters] = useState<FilterState>({
-    unitCode: '',
-    floorName: '',
-    lineName: '',
-    operation: ''
-  });
-
-  const rtmsService = new RTMSService();
+  const [filters, setFilters] = useState<Filters>({});
 
   const fetchData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
     try {
-      setLoading(true);
-      setError(null);
-
-      const [operatorData, insights] = await Promise.all([
-        rtmsService.getOperatorEfficiencies(filters),
-        rtmsService.getAIInsights()
-      ]);
-
-      setOperators(operatorData);
-      setAIInsights(insights);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
+      const data: ProductionAnalysis = await rtmsService.getOperatorEfficiencies(filters);
+      setOperators(data.operators ?? []); // ✅ safe fallback
+      setAIInsights(data.ai_insights ?? null);
+    } catch (err: any) {
+      console.error("Failed to fetch RTMS data:", err);
+      setError(err?.message ?? "Failed to load data");
     } finally {
       setLoading(false);
     }
@@ -40,15 +35,9 @@ export const useRTMSData = () => {
     fetchData();
   }, [fetchData]);
 
-  // Auto-refresh every 10 minutes
-  useEffect(() => {
-    const interval = setInterval(fetchData, 10 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
-
-  const updateFilters = useCallback((newFilters: Partial<FilterState>) => {
-    setFilters(prev => ({ ...prev, ...newFilters }));
-  }, []);
+  const updateFilters = (newFilters: Partial<Filters>) => {
+    setFilters((prev) => ({ ...prev, ...newFilters }));
+  };
 
   return {
     operators,
@@ -57,6 +46,6 @@ export const useRTMSData = () => {
     error,
     filters,
     updateFilters,
-    refetch: fetchData
+    refetch: fetchData,
   };
-};
+}
