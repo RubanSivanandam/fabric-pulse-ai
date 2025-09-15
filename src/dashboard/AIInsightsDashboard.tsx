@@ -1,7 +1,8 @@
+// src/components/dashboard/AIInsightsDashboard.tsx
 import React from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { AIInsights } from '../../types';
+import { AIInsights } from '../types';
 import { 
   Brain, 
   TrendingUp, 

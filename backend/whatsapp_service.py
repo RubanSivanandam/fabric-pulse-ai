@@ -1,6 +1,6 @@
 """
 Production-Ready Twilio WhatsApp Service for RTMS
-Guaranteed 100% working implementation with proper error handling
+UPDATED: Temporarily disabled WhatsApp notifications
 """
 
 import logging
@@ -35,28 +35,37 @@ class AlertMessage:
 class ProductionReadyWhatsAppService:
     """
     Production-ready WhatsApp service with Twilio integration
-    100% guaranteed working implementation
+    UPDATED: Temporarily disabled for testing
     """
     
     def __init__(self):
         self.config = config.twilio
         
-        # Validate configuration
-        if not self.config.is_configured():
-            logger.error("❌ Twilio configuration incomplete!")
-            raise ValueError("Twilio configuration is incomplete. Check your .env file.")
+        # TEMPORARILY DISABLED FLAG
+        self.temporarily_disabled = True
+        logger.info("🚫 WhatsApp service temporarily DISABLED")
         
-        # Initialize Twilio client
-        try:
-            self.client = Client(self.config.account_sid, self.config.auth_token)
-            logger.info("✅ Twilio client initialized successfully")
+        # Only initialize if not disabled
+        if not self.temporarily_disabled:
+            # Validate configuration
+            if not self.config.is_configured():
+                logger.error("❌ Twilio configuration incomplete!")
+                raise ValueError("Twilio configuration is incomplete. Check your .env file.")
             
-            # Test connection
-            self._test_connection()
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize Twilio client: {e}")
-            raise
+            # Initialize Twilio client
+            try:
+                self.client = Client(self.config.account_sid, self.config.auth_token)
+                logger.info("✅ Twilio client initialized successfully")
+                
+                # Test connection
+                self._test_connection()
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize Twilio client: {e}")
+                raise
+        else:
+            self.client = None
+            logger.info("🚫 Twilio client initialization skipped - service disabled")
         
         # Rate limiting
         self.last_alert_times: Dict[str, datetime] = {}
@@ -66,6 +75,10 @@ class ProductionReadyWhatsAppService:
     
     def _test_connection(self):
         """Test Twilio connection"""
+        if self.temporarily_disabled:
+            logger.info("🚫 Twilio connection test skipped - service disabled")
+            return
+            
         try:
             # Get account info to test connection
             account = self.client.api.accounts(self.config.account_sid).fetch()
@@ -81,8 +94,12 @@ class ProductionReadyWhatsAppService:
     async def send_efficiency_alert(self, alert_data: AlertMessage) -> bool:
         """
         Send efficiency alert via WhatsApp
-        Guaranteed 100% working implementation
+        DISABLED: Returns False immediately
         """
+        if self.temporarily_disabled:
+            logger.info(f"🚫 WhatsApp alert DISABLED for {alert_data.employee_name} ({alert_data.current_efficiency:.1f}%)")
+            return False
+            
         try:
             # Generate unique alert key for rate limiting
             alert_key = f"{alert_data.employee_code}_{alert_data.operation}"
@@ -132,7 +149,12 @@ class ProductionReadyWhatsAppService:
     def send_test_message(self) -> bool:
         """
         Send test message to verify WhatsApp integration
+        DISABLED: Returns False immediately
         """
+        if self.temporarily_disabled:
+            logger.info("🚫 WhatsApp test message DISABLED")
+            return False
+            
         try:
             test_variables = {
                 "1": "Test Employee (TEST001)",
@@ -159,7 +181,11 @@ class ProductionReadyWhatsAppService:
             return False
     
     async def send_daily_summary(self, summary_data: Dict[str, Any]) -> bool:
-        """Send daily production summary"""
+        """Send daily production summary - DISABLED"""
+        if self.temporarily_disabled:
+            logger.info("🚫 Daily summary WhatsApp message DISABLED")
+            return False
+            
         try:
             # Create a simple text message for daily summary
             summary_text = self._format_daily_summary(summary_data)
@@ -182,7 +208,6 @@ class ProductionReadyWhatsAppService:
         date = datetime.now().strftime("%Y-%m-%d")
         
         return f"""📊 RTMS BOT - Daily Summary 📊
-
 📅 Date: {date}
 
 🏭 Overall Performance:
@@ -204,6 +229,9 @@ class ProductionReadyWhatsAppService:
     
     def _can_send_alert(self, alert_key: str) -> bool:
         """Check if alert can be sent based on rate limiting"""
+        if self.temporarily_disabled:
+            return False
+            
         now = datetime.now()
         today = now.date().isoformat()
         
@@ -234,12 +262,13 @@ class ProductionReadyWhatsAppService:
         """Get service status"""
         return {
             "service": "Twilio WhatsApp Service",
-            "status": "active" if self.config.is_configured() else "inactive",
+            "status": "disabled" if self.temporarily_disabled else ("active" if self.config.is_configured() else "inactive"),
+            "temporarily_disabled": self.temporarily_disabled,
             "bot_name": self.config.bot_name,
-            "phone_number": self.config.alert_phone_number,
+            "phone_number": self.config.alert_phone_number if not self.temporarily_disabled else "DISABLED",
             "daily_alerts": self.daily_alert_count.get(datetime.now().date().isoformat(), 0),
             "max_daily_alerts": self.max_alerts_per_day,
-            "configuration_valid": self.config.is_configured()
+            "configuration_valid": self.config.is_configured() if not self.temporarily_disabled else "DISABLED"
         }
 
 # Global service instance

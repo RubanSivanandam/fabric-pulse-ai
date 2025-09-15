@@ -1,7 +1,8 @@
+// src/components/dashboard/MainDashboard.tsx
 import React from 'react';
-import { useRTMSData } from '../../hooks/useRTMSData';
-import { OperationFilter } from '../filters/OperationFilter';
-import { OperatorEfficiencyVisualization } from '../efficiency/OperatorEfficiencyVisualization';
+import { useRTMSData } from '../hooks/useRTMSData';
+import { OperationFilter } from '../components/filters/OperationFilter';
+import { OperatorEfficiencyVisualization } from '../components/efficiency/OperatorEfficiencyVisualization';
 import { AIInsightsDashboard } from './AIInsightsDashboard';
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { RefreshCw, Users, TrendingUp, AlertCircle } from 'lucide-react';
