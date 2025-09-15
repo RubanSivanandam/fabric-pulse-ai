@@ -134,6 +134,7 @@ export interface ServiceStatus {
 }
 
 export interface OperationsResponse {
+  data: string[] | PromiseLike<string[]>;
   operations: string[];
 }
 
