@@ -1,14 +1,19 @@
-// src/main.tsx
 import React from "react";
-import ReactDOM from "react-dom/client";
+import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
-import "./index.css"; // keep your global styles
+import { FilterContextProvider } from "./contexts/FilterContext";
+import { AIContextProvider } from "./contexts/AIContext";  // ✅ import AI provider
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+const container = document.getElementById("root")!;
+createRoot(container).render(
   <React.StrictMode>
     <BrowserRouter>
-      <App />
+      <FilterContextProvider>
+        <AIContextProvider>   {/* ✅ wrap inside here */}
+          <App />
+        </AIContextProvider>
+      </FilterContextProvider>
     </BrowserRouter>
   </React.StrictMode>
 );

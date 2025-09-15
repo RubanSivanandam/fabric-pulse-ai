@@ -1,211 +1,90 @@
-// src/contexts/FilterContext.tsx - FIXED: Hierarchical Filter Logic
-import React, { createContext, useContext, useReducer, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect } from "react";
+import { fetchHierarchy } from "../services/APIClient";
 
-interface FilterState {
-  unitCodes: string[];
-  floorNames: string[];
-  lineNames: string[];
-  operations: string[];
-  
-  selectedUnit: string | null;
-  selectedFloor: string | null;
-  selectedLine: string | null;
-  selectedOperation: string | null;
-  
-  loading: {
-    units: boolean;
-    floors: boolean;
-    lines: boolean;
-    operations: boolean;
+export interface FilterState {
+  unitCode: string | null;
+  floorName: string | null;
+  lineName: string | null;
+  operation: string | null;
+}
+
+export interface FilterContextType {
+  state: {
+    unitCodes: string[];
+    floors: string[];
+    lines: string[];
+    newOperSeqs: string[];
   };
+  selectedUnit: string;
+  selectedFloor: string;
+  selectedLine: string;
+  selectedOper: string;
+  setSelectedUnit: (u: string) => void;
+  setSelectedFloor: (f: string) => void;
+  setSelectedLine: (l: string) => void;
+  setSelectedOper: (o: string) => void;
 }
 
-type FilterAction = 
-  | { type: 'SET_UNIT_CODES'; payload: string[] }
-  | { type: 'SET_FLOOR_NAMES'; payload: string[] }
-  | { type: 'SET_LINE_NAMES'; payload: string[] }
-  | { type: 'SET_OPERATIONS'; payload: string[] }
-  | { type: 'SELECT_UNIT'; payload: string | null }
-  | { type: 'SELECT_FLOOR'; payload: string | null }
-  | { type: 'SELECT_LINE'; payload: string | null }
-  | { type: 'SELECT_OPERATION'; payload: string | null }
-  | { type: 'SET_LOADING'; payload: { key: keyof FilterState['loading']; value: boolean } }
-  | { type: 'RESET_FILTERS' };
-
-const initialState: FilterState = {
-  unitCodes: [],
-  floorNames: [],
-  lineNames: [],
-  operations: [],
-  selectedUnit: null,
-  selectedFloor: null,
-  selectedLine: null,
-  selectedOperation: null,
-  loading: {
-    units: false,
-    floors: false,
-    lines: false,
-    operations: false,
-  },
-};
-
-function filterReducer(state: FilterState, action: FilterAction): FilterState {
-  switch (action.type) {
-    case 'SET_UNIT_CODES':
-      return { ...state, unitCodes: action.payload };
-    
-    case 'SET_FLOOR_NAMES':
-      return { ...state, floorNames: action.payload };
-    
-    case 'SET_LINE_NAMES':
-      return { ...state, lineNames: action.payload };
-    
-    case 'SET_OPERATIONS':
-      return { ...state, operations: action.payload };
-    
-    case 'SELECT_UNIT':
-      return {
-        ...state,
-        selectedUnit: action.payload,
-        selectedFloor: null,
-        selectedLine: null,
-        selectedOperation: null,
-        floorNames: [],
-        lineNames: [],
-        operations: [],
-      };
-    
-    case 'SELECT_FLOOR':
-      return {
-        ...state,
-        selectedFloor: action.payload,
-        selectedLine: null,
-        selectedOperation: null,
-        lineNames: [],
-        operations: [],
-      };
-    
-    case 'SELECT_LINE':
-      return {
-        ...state,
-        selectedLine: action.payload,
-        selectedOperation: null,
-        operations: [],
-      };
-    
-    case 'SELECT_OPERATION':
-      return {
-        ...state,
-        selectedOperation: action.payload,
-      };
-    
-    case 'SET_LOADING':
-      return {
-        ...state,
-        loading: {
-          ...state.loading,
-          [action.payload.key]: action.payload.value,
-        },
-      };
-    
-    case 'RESET_FILTERS':
-      return initialState;
-    
-    default:
-      return state;
-  }
-}
-
-const FilterContext = createContext<{
-  state: FilterState;
-  dispatch: React.Dispatch<FilterAction>;
-  loadUnitCodes: () => Promise<void>;
-  loadFloorNames: (unitCode: string) => Promise<void>;
-  loadLineNames: (unitCode: string, floorName: string) => Promise<void>;
-  loadOperations: (unitCode: string, floorName: string, lineName: string) => Promise<void>;
-} | null>(null);
+const FilterContext = createContext<FilterContextType | undefined>(undefined);
 
 export function FilterContextProvider({ children }: { children: React.ReactNode }) {
-  const [state, dispatch] = useReducer(filterReducer, initialState);
+  const [unitCodes, setUnitCodes] = useState<string[]>([]);
+  const [floors, setFloors] = useState<string[]>([]);
+  const [lines, setLines] = useState<string[]>([]);
+  const [newOperSeqs, setNewOperSeqs] = useState<string[]>([]);
 
-  const loadUnitCodes = async () => {
-    dispatch({ type: 'SET_LOADING', payload: { key: 'units', value: true } });
-    try {
-      const response = await fetch('/api/rtms/filters/units');
-      const data = await response.json();
-      if (data.status === 'success') {
-        dispatch({ type: 'SET_UNIT_CODES', payload: data.data });
-      }
-    } catch (error) {
-      console.error('Failed to load unit codes:', error);
-    } finally {
-      dispatch({ type: 'SET_LOADING', payload: { key: 'units', value: false } });
-    }
-  };
+  const [selectedUnit, setSelectedUnit] = useState("");
+  const [selectedFloor, setSelectedFloor] = useState("");
+  const [selectedLine, setSelectedLine] = useState("");
+  const [selectedOper, setSelectedOper] = useState("");
 
-  const loadFloorNames = async (unitCode: string) => {
-    dispatch({ type: 'SET_LOADING', payload: { key: 'floors', value: true } });
-    try {
-      const response = await fetch(`/api/rtms/filters/floors?unit_code=${encodeURIComponent(unitCode)}`);
-      const data = await response.json();
-      if (data.status === 'success') {
-        dispatch({ type: 'SET_FLOOR_NAMES', payload: data.data });
-      }
-    } catch (error) {
-      console.error('Failed to load floor names:', error);
-    } finally {
-      dispatch({ type: 'SET_LOADING', payload: { key: 'floors', value: false } });
-    }
-  };
-
-  const loadLineNames = async (unitCode: string, floorName: string) => {
-    dispatch({ type: 'SET_LOADING', payload: { key: 'lines', value: true } });
-    try {
-      const response = await fetch(
-        `/api/rtms/filters/lines?unit_code=${encodeURIComponent(unitCode)}&floor_name=${encodeURIComponent(floorName)}`
-      );
-      const data = await response.json();
-      if (data.status === 'success') {
-        dispatch({ type: 'SET_LINE_NAMES', payload: data.data });
-      }
-    } catch (error) {
-      console.error('Failed to load line names:', error);
-    } finally {
-      dispatch({ type: 'SET_LOADING', payload: { key: 'lines', value: false } });
-    }
-  };
-
-  const loadOperations = async (unitCode: string, floorName: string, lineName: string) => {
-    dispatch({ type: 'SET_LOADING', payload: { key: 'operations', value: true } });
-    try {
-      const response = await fetch(
-        `/api/rtms/filters/operations?unit_code=${encodeURIComponent(unitCode)}&floor_name=${encodeURIComponent(floorName)}&line_name=${encodeURIComponent(lineName)}`
-      );
-      const data = await response.json();
-      if (data.status === 'success') {
-        dispatch({ type: 'SET_OPERATIONS', payload: data.data });
-      }
-    } catch (error) {
-      console.error('Failed to load operations:', error);
-    } finally {
-      dispatch({ type: 'SET_LOADING', payload: { key: 'operations', value: false } });
-    }
-  };
-
-  // Load unit codes on mount
+  // Load UnitCodes
   useEffect(() => {
-    loadUnitCodes();
+    fetchHierarchy("unitcode")
+      .then((res) => setUnitCodes(res.values || []))
+      .catch((err) => console.error("Failed to load unit codes:", err));
   }, []);
+
+  // Load Floors when Unit changes
+  useEffect(() => {
+    if (!selectedUnit) return setFloors([]);
+    fetchHierarchy("floorname", { unit_code: selectedUnit })
+      .then((res) => setFloors(res.values || []))
+      .catch((err) => console.error("Failed to load floors:", err));
+  }, [selectedUnit]);
+
+  // Load Lines when Floor changes
+  useEffect(() => {
+    if (!selectedFloor) return setLines([]);
+    fetchHierarchy("linename", { unit_code: selectedUnit, floor_name: selectedFloor })
+      .then((res) => setLines(res.values || []))
+      .catch((err) => console.error("Failed to load lines:", err));
+  }, [selectedFloor, selectedUnit]);
+
+  // Load Operations when Line changes
+  useEffect(() => {
+    if (!selectedLine) return setNewOperSeqs([]);
+    fetchHierarchy("newoperseq", {
+      unit_code: selectedUnit,
+      floor_name: selectedFloor,
+      line_name: selectedLine,
+    })
+      .then((res) => setNewOperSeqs(res.values || []))
+      .catch((err) => console.error("Failed to load operations:", err));
+  }, [selectedLine, selectedFloor, selectedUnit]);
 
   return (
     <FilterContext.Provider
       value={{
-        state,
-        dispatch,
-        loadUnitCodes,
-        loadFloorNames,
-        loadLineNames,
-        loadOperations,
+        state: { unitCodes, floors, lines, newOperSeqs },
+        selectedUnit,
+        selectedFloor,
+        selectedLine,
+        selectedOper,
+        setSelectedUnit,
+        setSelectedFloor,
+        setSelectedLine,
+        setSelectedOper,
       }}
     >
       {children}
@@ -214,9 +93,7 @@ export function FilterContextProvider({ children }: { children: React.ReactNode 
 }
 
 export function useFilters() {
-  const context = useContext(FilterContext);
-  if (!context) {
-    throw new Error('useFilters must be used within a FilterContextProvider');
-  }
-  return context;
+  const ctx = useContext(FilterContext);
+  if (!ctx) throw new Error("useFilters must be used within a FilterContextProvider");
+  return ctx;
 }

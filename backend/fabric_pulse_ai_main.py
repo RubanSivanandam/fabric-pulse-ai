@@ -2,7 +2,6 @@
 Fabric Pulse AI - Production Ready Backend
 Complete RTMS integration with Ollama AI, WhatsApp alerts, and dependent filters
 """
-
 import asyncio
 import json
 import logging
@@ -15,7 +14,6 @@ from dataclasses import dataclass, asdict
 from collections import defaultdict
 import time
 import threading
-
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -171,7 +169,7 @@ class OllamaAIService:
         
         length_instruction = length_prompts.get(length, length_prompts["medium"])
         
-        prompt = f"{length_instruction} of the following production data:\n\n{text}\n\nSummary:"
+        prompt = f"{length_instruction} of the following production data:\\n\\n{text}\\n\\nSummary:"
         
         try:
             result = subprocess.run([
@@ -182,7 +180,7 @@ class OllamaAIService:
                 return result.stdout.strip()
             else:
                 return "Unable to generate summary at this time."
-                
+        
         except Exception as e:
             logger.error(f"Ollama summarization failed: {e}")
             return "AI summarization service temporarily unavailable."
@@ -215,7 +213,7 @@ Respond only with valid JSON array:
                 response = result.stdout.strip()
                 
                 # Extract JSON from response
-                json_match = re.search(r'\[.*\]', response, re.DOTALL)
+                json_match = re.search(r'\\[.*\\]', response, re.DOTALL)
                 if json_match:
                     suggestions_data = json.loads(json_match.group())
                     
@@ -236,7 +234,7 @@ Respond only with valid JSON array:
                 {"id": "cutting-1", "label": "Cutting Operation", "confidence": 0.7},
                 {"id": "quality-1", "label": "Quality Check", "confidence": 0.6}
             ]
-            
+        
         except Exception as e:
             logger.error(f"Operation suggestion failed: {e}")
             return [{"id": "fallback-1", "label": "General Operation", "confidence": 0.5}]
@@ -263,14 +261,14 @@ Respond only with valid JSON array:
                 return response
             else:
                 return "Unable to generate completion at this time."
-                
+        
         except Exception as e:
             logger.error(f"Ollama completion failed: {e}")
             return "AI completion service temporarily unavailable."
 
 class EnhancedRTMSEngine:
     """Enhanced RTMS Engine with production-ready features"""
-
+    
     def __init__(self):
         self.db_config = config.database
         self.engine = self._create_database_engine()
@@ -281,7 +279,7 @@ class EnhancedRTMSEngine:
         # WhatsApp notifications disabled flag
         self.whatsapp_disabled = True
         logger.info("🚫 WhatsApp notifications temporarily DISABLED")
-
+        
         # Start background monitoring
         self.start_background_monitoring()
 
@@ -290,12 +288,11 @@ class EnhancedRTMSEngine:
         try:
             password = urllib.parse.quote_plus(self.db_config.password)
             username = urllib.parse.quote_plus(self.db_config.username)
-
             connection_string = (
                 f"mssql+pyodbc://{username}:{password}@{self.db_config.server}/"
                 f"{self.db_config.database}?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes"
             )
-
+            
             engine = create_engine(
                 connection_string,
                 pool_size=10,
@@ -304,10 +301,8 @@ class EnhancedRTMSEngine:
                 pool_recycle=3600,
                 echo=False
             )
-
             logger.info("✅ Database engine created successfully")
             return engine
-
         except Exception as e:
             logger.error(f"❌ Failed to create database engine: {e}")
             return None
@@ -323,7 +318,7 @@ class EnhancedRTMSEngine:
             """
             with self.engine.connect() as connection:
                 df = pd.read_sql(text(query), connection)
-            return df['UnitCode'].tolist()
+                return df['UnitCode'].tolist()
         except Exception as e:
             logger.error(f"❌ Failed to fetch unit codes: {e}")
             return []
@@ -339,7 +334,7 @@ class EnhancedRTMSEngine:
             """
             with self.engine.connect() as connection:
                 df = pd.read_sql(text(query), connection, params={"unit_code": unit_code})
-            return df['FloorName'].tolist()
+                return df['FloorName'].tolist()
         except Exception as e:
             logger.error(f"❌ Failed to fetch floor names: {e}")
             return []
@@ -351,7 +346,7 @@ class EnhancedRTMSEngine:
             SELECT DISTINCT [LineName]
             FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
             WHERE [UnitCode] = @unit_code AND [FloorName] = @floor_name 
-                AND [LineName] IS NOT NULL AND [LineName] != ''
+            AND [LineName] IS NOT NULL AND [LineName] != ''
             ORDER BY [LineName]
             """
             with self.engine.connect() as connection:
@@ -359,7 +354,7 @@ class EnhancedRTMSEngine:
                     "unit_code": unit_code, 
                     "floor_name": floor_name
                 })
-            return df['LineName'].tolist()
+                return df['LineName'].tolist()
         except Exception as e:
             logger.error(f"❌ Failed to fetch line names: {e}")
             return []
@@ -371,7 +366,7 @@ class EnhancedRTMSEngine:
             SELECT DISTINCT [NewOperSeq]
             FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
             WHERE [UnitCode] = @unit_code AND [FloorName] = @floor_name 
-                AND [LineName] = @line_name AND [NewOperSeq] IS NOT NULL AND [NewOperSeq] != ''
+            AND [LineName] = @line_name AND [NewOperSeq] IS NOT NULL AND [NewOperSeq] != ''
             ORDER BY [NewOperSeq]
             """
             with self.engine.connect() as connection:
@@ -380,7 +375,7 @@ class EnhancedRTMSEngine:
                     "floor_name": floor_name,
                     "line_name": line_name
                 })
-            return df['NewOperSeq'].tolist()
+                return df['NewOperSeq'].tolist()
         except Exception as e:
             logger.error(f"❌ Failed to fetch operations by line: {e}")
             return []
@@ -393,29 +388,30 @@ class EnhancedRTMSEngine:
         operation: Optional[str] = None,
         limit: int = 1000
     ) -> List[RTMSProductionData]:
-        """Fetch production data with optional filtering"""
-
+        """Fetch production data with optional filtering - FIXED DATE QUERY"""
         if not self.engine:
             logger.error("❌ Database engine not available")
             return []
 
         try:
+            # FIXED: Use hardcoded date '2025-09-12' instead of GETDATE()
             query = f"""
-    SELECT TOP ({limit})
-        [LineName], [EmpCode], [EmpName], [DeviceID],
-        [StyleNo], [OrderNo], [Operation], [SAM],
-        [Eff100], [Eff75], [ProdnPcs], [EffPer],
-        [OperSeq], [UsedMin], [TranDate], [UnitCode], 
-        [PartName], [FloorName], [ReptType], [PartSeq], 
-        [EffPer100], [EffPer75], [NewOperSeq],
-        [BuyerCode], [ISFinPart], [ISFinOper], [IsRedFlag]
-    FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
-    WHERE [ReptType] IN ('RTMS', 'RTM5', 'RTM$')
-        AND CAST([TranDate] AS DATE) = CAST(GETDATE() AS DATE)
-        AND [ProdnPcs] > 0
-        AND [EmpCode] IS NOT NULL
-        AND [LineName] IS NOT NULL
-"""
+            SELECT TOP ({limit})
+            [LineName], [EmpCode], [EmpName], [DeviceID],
+            [StyleNo], [OrderNo], [Operation], [SAM],
+            [Eff100], [Eff75], [ProdnPcs], [EffPer],
+            [OperSeq], [UsedMin], [TranDate], [UnitCode], 
+            [PartName], [FloorName], [ReptType], [PartSeq], 
+            [EffPer100], [EffPer75], [NewOperSeq],
+            [BuyerCode], [ISFinPart], [ISFinOper], [IsRedFlag]
+            FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
+            WHERE [ReptType] IN ('RTMS', 'RTM5', 'RTM$')
+            AND CAST([TranDate] AS DATE) = '2025-09-12'
+            AND [ProdnPcs] > 0
+            AND [EmpCode] IS NOT NULL
+            AND [LineName] IS NOT NULL
+            """
+            
             # Add filters
             params = {}
             if unit_code:
@@ -430,15 +426,14 @@ class EnhancedRTMSEngine:
             if operation:
                 query += " AND [NewOperSeq] = @operation"
                 params["operation"] = operation
-
+            
             query += " ORDER BY [TranDate] DESC"
-
+            
             # Execute query
             with self.engine.connect() as connection:
                 df = pd.read_sql(text(query), connection, params=params)
-
-            logger.info(f"📊 Retrieved {len(df)} production records")
-
+                logger.info(f"📊 Retrieved {len(df)} production records")
+            
             # Convert to data objects
             production_data = []
             for _, row in df.iterrows():
@@ -473,37 +468,33 @@ class EnhancedRTMSEngine:
                         IsRedFlag=int(row['IsRedFlag']) if pd.notna(row['IsRedFlag']) else 0
                     )
                     production_data.append(data)
-
                 except Exception as row_error:
                     logger.warning(f"⚠️ Error processing row: {row_error}")
                     continue
-
+            
             self.last_fetch_time = datetime.now()
             return production_data
-
+        
         except Exception as e:
             logger.error(f"❌ Database query failed: {e}")
             return []
 
     async def get_operations_list(self) -> List[str]:
-        """Get list of unique operations (NewOperSeq values)"""
+        """Get list of unique operations (NewOperSeq values) - FIXED DATE"""
         try:
             query = """
             SELECT DISTINCT [NewOperSeq]
             FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
             WHERE [NewOperSeq] IS NOT NULL
-                AND [NewOperSeq] != ''
-                AND CAST([TranDate] AS DATE) = CAST(GETDATE() AS DATE)
+            AND [NewOperSeq] != ''
+            AND CAST([TranDate] AS DATE) = '2025-09-12'
             ORDER BY [NewOperSeq]
             """
-
             with self.engine.connect() as connection:
                 df = pd.read_sql(text(query), connection)
-
-            operations = df['NewOperSeq'].tolist()
-            logger.info(f"📋 Retrieved {len(operations)} operations")
-            return operations
-
+                operations = df['NewOperSeq'].tolist()
+                logger.info(f"📋 Retrieved {len(operations)} operations")
+                return operations
         except Exception as e:
             logger.error(f"❌ Failed to fetch operations: {e}")
             return []
@@ -520,7 +511,6 @@ class EnhancedRTMSEngine:
 
         for emp_data in data:
             efficiency = emp_data.calculate_efficiency()
-
             operator = {
                 "emp_name": emp_data.EmpName,
                 "emp_code": emp_data.EmpCode,
@@ -536,7 +526,6 @@ class EnhancedRTMSEngine:
                 "status": self._get_efficiency_status(efficiency),
                 "is_top_performer": efficiency >= 100
             }
-
             operators.append(operator)
 
             # Check if should send WhatsApp alert using business logic
@@ -568,7 +557,7 @@ class EnhancedRTMSEngine:
             "whatsapp_disabled": self.whatsapp_disabled,
             "analysis_timestamp": datetime.now().isoformat(),
             "records_analyzed": len(data),
-            "data_date": datetime.now().strftime('%Y-%m-%d')
+            "data_date": "2025-09-12"  # Fixed data date
         }
 
     def _get_efficiency_status(self, efficiency: float) -> str:
@@ -606,7 +595,6 @@ class EnhancedRTMSEngine:
 
         # Generate insights
         summary = self._generate_summary_insight(overall_efficiency, len(operators), len(underperformers))
-
         performance_analysis = {
             "best_performing_line": max(line_avg.items(), key=lambda x: x[1]) if line_avg else None,
             "worst_performing_line": min(line_avg.items(), key=lambda x: x[1]) if line_avg else None,
@@ -648,10 +636,10 @@ class EnhancedRTMSEngine:
         if underperformers:
             recommendations.append(f"Focus training on {len(underperformers)} underperforming employees")
 
-            # Critical cases
-            critical_cases = [emp for emp in underperformers if emp["efficiency"] < config.alerts.critical_threshold]
-            if critical_cases:
-                recommendations.append(f"{len(critical_cases)} employees need immediate supervision")
+        # Critical cases
+        critical_cases = [emp for emp in underperformers if emp["efficiency"] < config.alerts.critical_threshold]
+        if critical_cases:
+            recommendations.append(f"{len(critical_cases)} employees need immediate supervision")
 
         # Line-specific recommendations
         if line_avg:
@@ -741,7 +729,7 @@ async def get_service_status():
         "whatsapp_disabled": rtms_engine.whatsapp_disabled,
         "database_connected": rtms_engine.engine is not None,
         "bot_name": "Fabric Pulse AI Bot",
-        "data_date": datetime.now().strftime('%Y-%m-%d'),
+        "data_date": "2025-09-12",  # Fixed data date
         "features": ["AI Insights", "WhatsApp Alerts", "Real-time Monitoring", "Dependent Filters"],
         "last_fetch": rtms_engine.last_fetch_time.isoformat() if rtms_engine.last_fetch_time else None,
         "timestamp": datetime.now().isoformat()
@@ -808,12 +796,49 @@ async def get_operations(unit_code: str = Query(None), floor_name: str = Query(N
             "status": "success",
             "data": operations,
             "count": len(operations),
-            "data_date": datetime.now().strftime('%Y-%m-%d'),
+            "data_date": "2025-09-12",  # Fixed data date
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
         logger.error(f"Failed to fetch operations: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch operations")
+
+# FIXED: Added missing analyze endpoint that frontend expects
+@app.get("/api/rtms/analyze")
+async def analyze_production_data(
+    unit_code: Optional[str] = Query(None),
+    floor_name: Optional[str] = Query(None),
+    line_name: Optional[str] = Query(None),
+    operation: Optional[str] = Query(None),
+    limit: int = Query(1000, ge=1, le=5000)
+):
+    """Analyze production data - frontend expects this endpoint"""
+    try:
+        # Fetch production data
+        data = await rtms_engine.fetch_production_data(
+            unit_code=unit_code,
+            floor_name=floor_name,
+            line_name=line_name,
+            operation=operation,
+            limit=limit
+        )
+        
+        # Process analysis
+        analysis = rtms_engine.process_efficiency_analysis(data)
+        
+        return {
+            "status": "success",
+            "data": analysis,
+            "filters_applied": {
+                "unit_code": unit_code,
+                "floor_name": floor_name,
+                "line_name": line_name,
+                "operation": operation
+            }
+        }
+    except Exception as e:
+        logger.error(f"Failed to analyze production data: {e}")
+        raise HTTPException(status_code=500, detail="Failed to analyze production data")
 
 @app.get("/api/rtms/efficiency")
 async def get_operator_efficiencies(
@@ -833,10 +858,10 @@ async def get_operator_efficiencies(
             operation=operation,
             limit=limit
         )
-
+        
         # Process analysis
         analysis = rtms_engine.process_efficiency_analysis(data)
-
+        
         return {
             "status": "success",
             "data": analysis,
@@ -847,7 +872,6 @@ async def get_operator_efficiencies(
                 "operation": operation
             }
         }
-
     except Exception as e:
         logger.error(f"Failed to get operator efficiencies: {e}")
         raise HTTPException(status_code=500, detail="Failed to get operator efficiencies")

@@ -1,4 +1,4 @@
-// src/components/AlertsPanel.tsx - Complete Alerts Management
+// src/components/AlertsPanel.tsx - Complete Alerts Management (updated, safe GSAP + defensive)
 import React, { useEffect, useRef, useState } from "react";
 import { gsap } from "gsap";
 import {
@@ -36,66 +36,125 @@ interface AlertsPanelProps {
 }
 
 export function AlertsPanel({ data }: AlertsPanelProps) {
-  const panelRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const [priorityFilter, setPriorityFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const { state: aiState } = useAI();
 
+  // Safe GSAP: animate panel + items only when DOM nodes exist
   useEffect(() => {
-    gsap.from(panelRef.current, {
-      y: 50,
-      opacity: 0,
-      duration: 0.8,
-      ease: "back.out(1.7)",
-    });
+    let panelTween: gsap.core.Tween | null = null;
+    let itemsTween: gsap.core.Tween | null = null;
 
-    gsap.from(".alert-item", {
-      x: -30,
-      opacity: 0,
-      duration: 0.5,
-      stagger: 0.1,
-      ease: "power2.out",
-      delay: 0.3,
-    });
+    try {
+      if (panelRef.current) {
+        panelTween = gsap.from(panelRef.current, {
+          y: 50,
+          opacity: 0,
+          duration: 0.8,
+          ease: "back.out(1.7)",
+        });
+      }
+
+      // query alert items inside panelRef to avoid global selector failing or matching nothing
+      const items =
+        panelRef.current?.querySelectorAll &&
+        panelRef.current.querySelectorAll(".alert-item");
+
+      if (items && items.length > 0) {
+        itemsTween = gsap.from(items, {
+          x: -30,
+          opacity: 0,
+          duration: 0.5,
+          stagger: 0.1,
+          ease: "power2.out",
+          delay: panelTween ? 0.2 : 0,
+        });
+      }
+    } catch (err) {
+      // swallow GSAP runtime errors (avoid crashing UI)
+      // log for debugging
+      // eslint-disable-next-line no-console
+      console.warn("GSAP animation failed or was skipped:", err);
+    }
+
+    return () => {
+      try {
+        panelTween?.kill();
+      } catch {}
+      try {
+        itemsTween?.kill();
+      } catch {}
+      // also kill any tweens targeting nodes inside panelRef to be safe
+      try {
+        if (panelRef.current) {
+          gsap.killTweensOf(panelRef.current);
+          const items =
+            panelRef.current.querySelectorAll && panelRef.current.querySelectorAll(".alert-item");
+          if (items && items.length > 0) gsap.killTweensOf(items as any);
+        }
+      } catch {}
+    };
+    // only run on mount/unmount; if you want to re-run on data changes change deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const getAlerts = () => {
     const alerts: any[] = [];
 
-    // Add production alerts from data
-    if (data?.underperformers) {
+    // Add production alerts from data (defensive checks)
+    if (data && Array.isArray(data.underperformers) && data.underperformers.length > 0) {
       data.underperformers.forEach((emp: any, index: number) => {
+        // defensive field reads with fallbacks
+        const empName = emp?.emp_name ?? emp?.name ?? `Employee-${index}`;
+        const empCode = emp?.emp_code ?? emp?.code ?? "N/A";
+        const lineName = emp?.line_name ?? emp?.line ?? "Unknown Line";
+        const newOperSeq = emp?.new_oper_seq ?? emp?.operation ?? "Op";
+        const unitCode = emp?.unit_code ?? emp?.UnitCode ?? "Unknown Unit";
+        const floorName = emp?.floor_name ?? emp?.floor ?? "Unknown Floor";
+        const efficiency = typeof emp?.efficiency === "number" ? emp.efficiency : null;
+
         alerts.push({
           id: `prod-${index}`,
           type: "efficiency",
-          priority: emp.efficiency < 70 ? "critical" : "high",
-          title: `Low Efficiency Alert - ${emp.emp_name}`,
-          description: `Employee ${emp.emp_name} (${emp.emp_code}) is performing at ${emp.efficiency}% efficiency in ${emp.line_name} - ${emp.new_oper_seq}`,
+          priority: efficiency !== null ? (efficiency < 70 ? "critical" : "high") : "high",
+          title: `Low Efficiency Alert - ${empName}`,
+          description: `Employee ${empName} (${empCode}) is performing at ${efficiency ?? "N/A"}% efficiency in ${lineName} - ${newOperSeq}`,
           timestamp: new Date().toISOString(),
-          location: `${emp.unit_code} > ${emp.floor_name} > ${emp.line_name}`,
-          operation: emp.new_oper_seq,
-          efficiency: emp.efficiency,
+          location: `${unitCode} > ${floorName} > ${lineName}`,
+          operation: newOperSeq,
+          efficiency,
           target: 85,
           status: "active",
         });
       });
     }
 
-    // Add AI insights as alerts
-    aiState.insights.forEach((insight) => {
-      if (insight.type === "alert") {
-        alerts.push({
-          id: insight.id,
-          type: "ai_alert",
-          priority: insight.priority,
-          title: insight.title,
-          description: insight.description,
-          timestamp: insight.timestamp,
-          confidence: insight.confidence,
-          status: "active",
-        });
-      }
-    });
+    // Add AI insights as alerts (defensive: aiState may be undefined or insights not array)
+    const insights = aiState?.insights;
+    if (Array.isArray(insights) && insights.length > 0) {
+      insights.forEach((insight: any) => {
+        try {
+          if (insight?.type === "alert") {
+            alerts.push({
+              id: insight.id ?? `ai-${Math.random().toString(36).slice(2, 9)}`,
+              type: "ai_alert",
+              priority: insight.priority ?? "medium",
+              title: insight.title ?? "AI Alert",
+              description: insight.description ?? "",
+              timestamp: insight.timestamp ?? new Date().toISOString(),
+              confidence:
+                typeof insight.confidence === "number" ? insight.confidence : undefined,
+              status: "active",
+            });
+          }
+        } catch (err) {
+          // skip malformed insight entries
+          // eslint-disable-next-line no-console
+          console.warn("Skipping malformed AI insight:", err, insight);
+        }
+      });
+    }
 
     return alerts;
   };
@@ -103,8 +162,7 @@ export function AlertsPanel({ data }: AlertsPanelProps) {
   const alerts = getAlerts();
 
   const filteredAlerts = alerts.filter((alert) => {
-    if (priorityFilter !== "all" && alert.priority !== priorityFilter)
-      return false;
+    if (priorityFilter !== "all" && alert.priority !== priorityFilter) return false;
     if (statusFilter !== "all" && alert.status !== statusFilter) return false;
     return true;
   });
@@ -152,6 +210,18 @@ export function AlertsPanel({ data }: AlertsPanelProps) {
 
   const stats = getAlertStats();
 
+  // helper to format timestamp defensively
+  const formatTime = (iso?: string) => {
+    try {
+      if (!iso) return "--:--";
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return "--:--";
+      return d.toLocaleTimeString();
+    } catch {
+      return "--:--";
+    }
+  };
+
   return (
     <div ref={panelRef} className="space-y-6">
       {/* Alert Statistics */}
@@ -164,25 +234,19 @@ export function AlertsPanel({ data }: AlertsPanelProps) {
         </Card>
         <Card className="bg-gradient-to-br from-red-900/50 to-red-800/50 border-red-500/20">
           <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold text-red-400">
-              {stats.critical}
-            </div>
+            <div className="text-2xl font-bold text-red-400">{stats.critical}</div>
             <div className="text-xs text-red-300">Critical</div>
           </CardContent>
         </Card>
         <Card className="bg-gradient-to-br from-orange-900/50 to-orange-800/50 border-orange-500/20">
           <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold text-orange-400">
-              {stats.high}
-            </div>
+            <div className="text-2xl font-bold text-orange-400">{stats.high}</div>
             <div className="text-xs text-orange-300">High</div>
           </CardContent>
         </Card>
         <Card className="bg-gradient-to-br from-yellow-900/50 to-yellow-800/50 border-yellow-500/20">
           <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold text-yellow-400">
-              {stats.medium}
-            </div>
+            <div className="text-2xl font-bold text-yellow-400">{stats.medium}</div>
             <div className="text-xs text-yellow-300">Medium</div>
           </CardContent>
         </Card>
@@ -204,28 +268,29 @@ export function AlertsPanel({ data }: AlertsPanelProps) {
         </CardHeader>
         <CardContent className="flex space-x-4">
           <div className="flex-1">
-           <select
-        value={priorityFilter}
-        onChange={(e) => setPriorityFilter(e.target.value)}
-        className="w-full bg-gray-800 border border-gray-600 text-white p-2 rounded-md"
-      >
-        <option value="all">All Priorities</option>
-        <option value="critical">Critical</option>
-        <option value="high">High</option>
-        <option value="medium">Medium</option>
-        <option value="low">Low</option>
-      </select>          </div>
+            <select
+              value={priorityFilter}
+              onChange={(e) => setPriorityFilter(e.target.value)}
+              className="w-full bg-gray-800 border border-gray-600 text-white p-2 rounded-md"
+            >
+              <option value="all">All Priorities</option>
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </div>
           <div className="flex-1">
-           <select
-  value={statusFilter}
-  onChange={(e) => setStatusFilter(e.target.value)}
-  className="w-full bg-gray-800 border border-gray-600 text-white p-2 rounded-md"
->
-  <option value="all">All Status</option>
-  <option value="active">Active</option>
-  <option value="resolved">Resolved</option>
-  <option value="acknowledged">Acknowledged</option>
-</select>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="w-full bg-gray-800 border border-gray-600 text-white p-2 rounded-md"
+            >
+              <option value="all">All Status</option>
+              <option value="active">Active</option>
+              <option value="resolved">Resolved</option>
+              <option value="acknowledged">Acknowledged</option>
+            </select>
           </div>
         </CardContent>
       </Card>
@@ -242,9 +307,7 @@ export function AlertsPanel({ data }: AlertsPanelProps) {
               {filteredAlerts.length} alerts
             </Badge>
           </CardTitle>
-          <CardDescription>
-            Real-time production alerts and notifications
-          </CardDescription>
+          <CardDescription>Real-time production alerts and notifications</CardDescription>
         </CardHeader>
         <CardContent>
           {filteredAlerts.length === 0 ? (
@@ -269,34 +332,22 @@ export function AlertsPanel({ data }: AlertsPanelProps) {
                   }`}
                 >
                   <div className="flex items-start space-x-3">
-                    <div
-                      className={`p-2 rounded-full ${getPriorityColor(
-                        alert.priority
-                      )}`}
-                    >
+                    <div className={`p-2 rounded-full ${getPriorityColor(alert.priority)}`}>
                       {getPriorityIcon(alert.priority)}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between mb-2">
-                        <h4 className="font-semibold text-white truncate">
-                          {alert.title}
-                        </h4>
+                        <h4 className="font-semibold text-white truncate">{alert.title}</h4>
                         <div className="flex items-center space-x-2 flex-shrink-0">
-                          <Badge
-                            className={`text-xs ${getPriorityColor(
-                              alert.priority
-                            )}`}
-                          >
-                            {alert.priority.toUpperCase()}
+                          <Badge className={`text-xs ${getPriorityColor(alert.priority)}`}>
+                            {String(alert.priority).toUpperCase()}
                           </Badge>
                           <span className="text-xs text-gray-400">
-                            {new Date(alert.timestamp).toLocaleTimeString()}
+                            {formatTime(alert.timestamp)}
                           </span>
                         </div>
                       </div>
-                      <p className="text-sm text-gray-300 mb-3">
-                        {alert.description}
-                      </p>
+                      <p className="text-sm text-gray-300 mb-3">{alert.description}</p>
 
                       {/* Alert Details */}
                       <div className="flex flex-wrap gap-4 text-xs text-gray-400">
@@ -315,16 +366,13 @@ export function AlertsPanel({ data }: AlertsPanelProps) {
                         {alert.efficiency !== undefined && (
                           <div className="flex items-center space-x-1">
                             <span>
-                              Efficiency: {alert.efficiency}% / {alert.target}%
+                              Efficiency: {alert.efficiency}% / {alert.target ?? "N/A"}%
                             </span>
                           </div>
                         )}
-                        {alert.confidence && (
+                        {alert.confidence !== undefined && (
                           <div className="flex items-center space-x-1">
-                            <span>
-                              AI Confidence:{" "}
-                              {(alert.confidence * 100).toFixed(0)}%
-                            </span>
+                            <span>AI Confidence: {(alert.confidence * 100).toFixed(0)}%</span>
                           </div>
                         )}
                       </div>
@@ -345,11 +393,7 @@ export function AlertsPanel({ data }: AlertsPanelProps) {
                           View Details
                         </Button>
                         {alert.type === "efficiency" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="text-xs"
-                          >
+                          <Button size="sm" variant="outline" className="text-xs">
                             Send Notification
                           </Button>
                         )}
