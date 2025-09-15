@@ -2,7 +2,7 @@ export class APIClient {
   private baseURL: string;
 
   constructor() {
-    this.baseURL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    this.baseURL =  'http://localhost:8000';
   }
 
   async get(endpoint: string): Promise<any> {

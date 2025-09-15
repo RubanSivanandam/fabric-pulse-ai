@@ -1,36 +1,45 @@
-// src/pages/MainDashboard.tsx - COMPLETE AI-POWERED DASHBOARD
-import React, { useEffect, useRef, useState } from 'react';
-import { gsap } from 'gsap';
-import { useQuery } from '@tanstack/react-query';
-import { 
-  TrendingUp, 
-  Users, 
-  AlertTriangle, 
+// src/pages/MainDashboard.tsx - FULL FIXED VERSION (preserves your UI, prevents infinite loops)
+import React, { useEffect, useRef, useState, useCallback } from "react";
+import { gsap } from "gsap";
+import { useQuery } from "@tanstack/react-query";
+import {
+  TrendingUp,
+  Users,
+  AlertTriangle,
   Brain,
   RefreshCw,
   Zap,
   Target,
-  BarChart3
-} from 'lucide-react';
+  BarChart3,
+} from "lucide-react";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 
 // Components
-import { HierarchicalFilter } from '@/components/HierarchicalFilter';
-import { EfficiencyChart } from '../components/charts/EfficiencyChart';
-import { ProductionChart } from '../components/charts/ProductionChart';
-// import { OperatorPerformanceChart } from '@/components/charts/OperatorPerformanceChart';
-import { AIInsightsPanel } from '../components/AIInsightsPanel';
-import { AlertsPanel } from '../components/AlertsPanel';
-// import { LoadingSpinner } from '../components/ui/loading-spinner';
+import { HierarchicalFilter } from "@/components/HierarchicalFilter";
+import { EfficiencyChart } from "../components/charts/EfficiencyChart";
+import { ProductionChart } from "../components/charts/ProductionChart";
+import { AIInsightsPanel } from "../components/AIInsightsPanel";
+import { AlertsPanel } from "../components/AlertsPanel";
 
 // Contexts
-import { useAI } from '@/contexts/AIContext';
-import { useFilters } from '@/contexts/FilterContext';
+import { useAI } from "@/contexts/AIContext";
+import { useFilters } from "@/contexts/FilterContext";
 
 interface FilterState {
   unitCode: string | null;
@@ -41,6 +50,8 @@ interface FilterState {
 
 export function MainDashboard() {
   const dashboardRef = useRef<HTMLDivElement>(null);
+
+  // Keep a compact stable filters state
   const [currentFilters, setCurrentFilters] = useState<FilterState>({
     unitCode: null,
     floorName: null,
@@ -49,53 +60,77 @@ export function MainDashboard() {
   });
 
   const { state: aiState, analyzeProduction } = useAI();
-  const { state: filterState } = useFilters(); // ✅ get unitCodes, floorNames, etc. from context
+  const { state: filterState } = useFilters(); // unitCodes, floorNames, etc.
+
+  // A ref to track last analyzed "signature" to avoid re-analyzing identical data repeatedly
+  const lastAnalyzedSignatureRef = useRef<string | null>(null);
+
+  // Build query params from filters (stable string to use inside fetch)
+  const buildQueryString = useCallback((filters: FilterState) => {
+    const params = new URLSearchParams();
+    if (filters.unitCode) params.append("unit_code", filters.unitCode);
+    if (filters.floorName) params.append("floor_name", filters.floorName);
+    if (filters.lineName) params.append("line_name", filters.lineName);
+    if (filters.operation) params.append("operation", filters.operation);
+    return params.toString();
+  }, []);
 
   // Production data query with filters
-  const { data: productionData, isLoading, isError, refetch } = useQuery({
-    queryKey: ['production-data', currentFilters],
+  const {
+    data: productionData,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery({
+    queryKey: ["production-data", currentFilters.unitCode, currentFilters.floorName, currentFilters.lineName, currentFilters.operation],
     queryFn: async () => {
-      const params = new URLSearchParams();
-      if (currentFilters.unitCode) params.append('unit_code', currentFilters.unitCode);
-      if (currentFilters.floorName) params.append('floor_name', currentFilters.floorName);
-      if (currentFilters.lineName) params.append('line_name', currentFilters.lineName);
-      if (currentFilters.operation) params.append('operation', currentFilters.operation);
-      
-      const response = await fetch(`/api/rtms/efficiency?${params.toString()}`);
+      const qs = buildQueryString(currentFilters);
+      const url = `/api/rtms/efficiency${qs ? `?${qs}` : ""}`;
+      const response = await fetch(url);
       if (!response.ok) {
-        throw new Error('Failed to fetch production data');
+        throw new Error("Failed to fetch production data");
       }
+      // assume backend returns { status, data, ... }
       return response.json();
     },
-    refetchInterval: 30000, // Refetch every 30 seconds
+    refetchInterval: 30000, // keep polling every 30s
+    staleTime: 15_000, // treat as fresh for 15s to reduce unnecessary rapid refetch/analyze loops
   });
 
-  // GSAP Animations
+  // GSAP Animations (runs once)
   useEffect(() => {
     const tl = gsap.timeline();
-    
-    tl.from('.dashboard-header', {
+
+    tl.from(".dashboard-header", {
       y: -100,
       opacity: 0,
       duration: 0.8,
       ease: "back.out(1.7)",
     })
-    .from('.dashboard-card', {
-      y: 50,
-      opacity: 0,
-      duration: 0.6,
-      stagger: 0.1,
-      ease: "power2.out",
-    }, "-=0.4")
-    .from('.chart-container', {
-      scale: 0.9,
-      opacity: 0,
-      duration: 0.8,
-      stagger: 0.2,
-      ease: "back.out(1.7)",
-    }, "-=0.3");
+      .from(
+        ".dashboard-card",
+        {
+          y: 50,
+          opacity: 0,
+          duration: 0.6,
+          stagger: 0.1,
+          ease: "power2.out",
+        },
+        "-=0.4"
+      )
+      .from(
+        ".chart-container",
+        {
+          scale: 0.9,
+          opacity: 0,
+          duration: 0.8,
+          stagger: 0.2,
+          ease: "back.out(1.7)",
+        },
+        "-=0.3"
+      );
 
-    gsap.to('.ai-pulse', {
+    gsap.to(".ai-pulse", {
       scale: 1.1,
       opacity: 0.7,
       duration: 2,
@@ -104,21 +139,64 @@ export function MainDashboard() {
       ease: "power2.inOut",
     });
 
+    // cleanup
+    return () => {
+      tl.kill();
+    };
   }, []);
 
-  // AI Analysis when data changes
+  // AI Analysis when productionData changes BUT only when the "signature" differs
   useEffect(() => {
-    if (productionData?.data) {
-      analyzeProduction(productionData.data);
+    // productionData expected shape: { status, data: { operators: [...], overall_efficiency, total_production, underperformers, ... }, ... }
+    if (!productionData?.data) return;
+
+    try {
+      // Create a lightweight signature: length of operators + overall_efficiency + maybe timestamp if provided
+      const data = productionData.data;
+      const operatorsLen = Array.isArray(data.operators) ? data.operators.length : 0;
+      const overallEff = (typeof data.overall_efficiency === "number") ? data.overall_efficiency : 0;
+      // backend may include a timestamp; prefer it if present
+      const ts = data.timestamp || productionData.timestamp || "";
+
+      const signature = `${operatorsLen}|${overallEff}|${ts}`;
+
+      // If same as last analyzed signature, skip analyzeProduction to avoid loops
+      if (lastAnalyzedSignatureRef.current === signature) {
+        return;
+      }
+
+      // Update ref then run analysis
+      lastAnalyzedSignatureRef.current = signature;
+
+      // Only invoke analyze if there are operators to analyze
+      if (operatorsLen > 0) {
+        analyzeProduction(data);
+      }
+    } catch (err) {
+      // safe fail
+      // eslint-disable-next-line no-console
+      console.error("Error preparing AI analysis:", err);
     }
   }, [productionData, analyzeProduction]);
 
-  // Handle filter changes
-  const handleFilterChange = (filters: FilterState) => {
-    setCurrentFilters(filters);
-  };
+  // Handle filter changes: only set when different (avoid needless state churn)
+  const handleFilterChange = useCallback((filters: FilterState) => {
+    setCurrentFilters((prev) => {
+      if (
+        prev.unitCode === filters.unitCode &&
+        prev.floorName === filters.floorName &&
+        prev.lineName === filters.lineName &&
+        prev.operation === filters.operation
+      ) {
+        return prev; // no-op if identical
+      }
+      // reset lastAnalyzedSignature so new filter triggers fresh analysis on next fetch
+      lastAnalyzedSignatureRef.current = null;
+      return { ...filters };
+    });
+  }, []);
 
-  // Calculate metrics
+  // Calculate metrics (safe and memo-like within render)
   const getMetrics = () => {
     if (!productionData?.data) {
       return {
@@ -132,15 +210,15 @@ export function MainDashboard() {
     }
 
     const data = productionData.data;
-    const operators = data.operators || [];
-    
+    const operators = Array.isArray(data.operators) ? data.operators : [];
+
     return {
       totalOperators: operators.length,
-      averageEfficiency: data.overall_efficiency || 0,
-      totalProduction: data.total_production || 0,
-      alertCount: data.underperformers?.length || 0,
+      averageEfficiency: typeof data.overall_efficiency === "number" ? data.overall_efficiency : 0,
+      totalProduction: typeof data.total_production === "number" ? data.total_production : 0,
+      alertCount: Array.isArray(data.underperformers) ? data.underperformers.length : 0,
       topPerformers: operators.filter((op: any) => op.efficiency >= 100).length,
-      underperformers: data.underperformers?.length || 0,
+      underperformers: Array.isArray(data.underperformers) ? data.underperformers.length : 0,
     };
   };
 
@@ -148,7 +226,6 @@ export function MainDashboard() {
 
   return (
     <div ref={dashboardRef} className="min-h-screen p-6 space-y-6">
-      
       {/* Dashboard Header */}
       <div className="dashboard-header flex flex-col lg:flex-row lg:items-center lg:justify-between space-y-4 lg:space-y-0">
         <div>
@@ -157,20 +234,24 @@ export function MainDashboard() {
           </h1>
           <p className="text-gray-400 text-lg mt-2">Real-time AI-powered manufacturing insights</p>
         </div>
-        
+
         <div className="flex items-center space-x-4">
           {/* AI Status */}
           <div className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-green-500/20 to-blue-500/20 rounded-full border border-green-400/30">
-            <Brain className={`h-5 w-5 ai-pulse ${aiState.aiStatus === 'active' ? 'text-green-400' : 'text-gray-400'}`} />
+            <Brain className={`h-5 w-5 ai-pulse ${aiState.aiStatus === "active" ? "text-green-400" : "text-gray-400"}`} />
             <span className="text-green-300 font-medium">
-              AI {aiState.aiStatus === 'active' ? 'Analyzing' : 'Ready'}
+              AI {aiState.aiStatus === "active" ? "Analyzing" : "Ready"}
             </span>
           </div>
-          
+
           {/* Refresh Button */}
-          <Button 
-            onClick={() => refetch()} 
-            variant="outline" 
+          <Button
+            onClick={() => {
+              // clear last signature so next fetch+analyze runs fresh
+              lastAnalyzedSignatureRef.current = null;
+              refetch();
+            }}
+            variant="outline"
             size="sm"
             className="border-blue-400/30 text-blue-300 hover:bg-blue-500/20"
           >
@@ -201,9 +282,7 @@ export function MainDashboard() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-white">{metrics.totalOperators}</div>
-            <p className="text-xs text-blue-300 mt-1">
-              {metrics.topPerformers} high performers
-            </p>
+            <p className="text-xs text-blue-300 mt-1">{metrics.topPerformers} high performers</p>
           </CardContent>
         </Card>
 
@@ -224,10 +303,10 @@ export function MainDashboard() {
             <Target className="h-4 w-4 text-purple-400" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-white">{metrics.totalProduction.toLocaleString()}</div>
-            <p className="text-xs text-purple-300 mt-1">
-              pieces produced today
-            </p>
+            <div className="text-2xl font-bold text-white">
+              {metrics.totalProduction ? metrics.totalProduction.toLocaleString() : 0}
+            </div>
+            <p className="text-xs text-purple-300 mt-1">pieces produced today</p>
           </CardContent>
         </Card>
 
@@ -238,9 +317,7 @@ export function MainDashboard() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-white">{metrics.alertCount}</div>
-            <p className="text-xs text-red-300 mt-1">
-              {metrics.underperformers} need attention
-            </p>
+            <p className="text-xs text-red-300 mt-1">{metrics.underperformers} need attention</p>
           </CardContent>
         </Card>
       </div>
@@ -301,9 +378,7 @@ export function MainDashboard() {
               </CardTitle>
               <CardDescription>Individual operator efficiency analysis</CardDescription>
             </CardHeader>
-            {/* <CardContent>
-              <OperatorPerformanceChart data={productionData?.data} />
-            </CardContent> */}
+            {/* optional: <CardContent><OperatorPerformanceChart data={productionData?.data} /></CardContent> */}
           </Card>
         </TabsContent>
 
@@ -327,11 +402,8 @@ export function MainDashboard() {
                   Last AI Analysis: {new Date(aiState.lastAnalysis).toLocaleTimeString()}
                 </span>
               </div>
-              <Badge 
-                variant={aiState.aiStatus === 'active' ? 'default' : 'secondary'} 
-                className="animate-pulse"
-              >
-                {aiState.isAnalyzing ? 'Processing...' : 'Ready'}
+              <Badge variant={aiState.aiStatus === "active" ? "default" : "secondary"} className="animate-pulse">
+                {aiState.isAnalyzing ? "Processing..." : "Ready"}
               </Badge>
             </CardContent>
           </Card>
@@ -340,3 +412,4 @@ export function MainDashboard() {
     </div>
   );
 }
+
