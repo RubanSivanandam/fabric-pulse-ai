@@ -180,6 +180,7 @@ const FabricPulseDashboard = () => {
   // Fetch RTMS data every 10 minutes
   useEffect(() => {
     const fetchRTMSData = async () => {
+      console.log('Attempting to fetch RTMS data from backend...');
       try {
         setLoading(true);
         
@@ -187,6 +188,11 @@ const FabricPulseDashboard = () => {
         const analysisResponse = await fetch('http://localhost:8000/api/rtms/analyze');
         const analysisData = await analysisResponse.json();
         
+        if (!analysisResponse.ok) {
+          throw new Error(`HTTP error! status: ${analysisResponse.status}`);
+        }
+        
+        console.log('Successfully fetched analysis data:', analysisData);
         if (analysisData.status === 'success') {
           setRtmsData(analysisData.data.ai_analysis);
           setHierarchyData(analysisData.data.hierarchy);
@@ -196,6 +202,11 @@ const FabricPulseDashboard = () => {
         const alertsResponse = await fetch('http://localhost:8000/api/rtms/alerts');
         const alertsData = await alertsResponse.json();
         
+        if (!alertsResponse.ok) {
+          throw new Error(`HTTP error! status: ${alertsResponse.status}`);
+        }
+        
+        console.log('Successfully fetched alerts data:', alertsData);
         if (alertsData.status === 'success') {
           setAlerts(alertsData.alerts);
         }
@@ -203,6 +214,7 @@ const FabricPulseDashboard = () => {
       } catch (error) {
         console.error('Failed to fetch RTMS data:', error);
         // Use mock data for development
+        console.log('Using mock data due to backend connection failure');
         setRtmsData({
           status: 'success',
           overall_efficiency: 87.5,
