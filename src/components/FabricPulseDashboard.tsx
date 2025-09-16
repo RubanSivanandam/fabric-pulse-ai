@@ -239,7 +239,20 @@ const fetchLinesApi = async (unitCode: string, floorName: string): Promise<LineD
   if (!response.ok) throw new Error('Failed to fetch lines from API');
   const result = await response.json();
   console.log('fetchLinesApi result:', result);
-  const lines = Array.isArray(result.data) ? result.data.filter((line: any) => line.line_name && typeof line.line_name === 'string' && line.line_name.trim() !== '') : [];
+  // Transform string array into LineData array
+  const lines = Array.isArray(result.data)
+    ? result.data
+        .filter((line: any) => line && typeof line === 'string' && line.trim() !== '')
+        .map((line: string): LineData => ({
+          line_name: line.trim(),
+          unit_code: unitCode,
+          total_production: 0,
+          target: 0,
+          avg_efficiency: 0,
+          operator_count: 0,
+        }))
+    : [];
+  console.log('fetchLinesApi transformed:', lines);
   return lines;
 };
 
@@ -264,6 +277,18 @@ const getSeverity = (eff: number): Severity => {
   if (eff < 85) return 'medium';
   return 'low';
 };
+
+// Color palette for vibrant graph bars
+const COLOR_PALETTE = [
+  'hsl(0, 70%, 50%)',   // Red
+  'hsl(120, 60%, 50%)', // Green
+  'hsl(240, 70%, 50%)', // Blue
+  'hsl(60, 70%, 50%)',  // Yellow
+  'hsl(180, 60%, 50%)', // Cyan
+  'hsl(300, 70%, 50%)', // Magenta
+  'hsl(30, 70%, 50%)',  // Orange
+  'hsl(270, 60%, 50%)', // Purple
+];
 
 // Component
 const FabricPulseDashboard = () => {
@@ -450,6 +475,7 @@ const FabricPulseDashboard = () => {
     try {
       const hierarchy: RTMSHierarchy = {};
 
+      // Populate from operators
       if (Array.isArray(memoizedOperators)) {
         memoizedOperators.forEach(op => {
           const unitCode = op.unit_code && typeof op.unit_code === 'string' && op.unit_code.trim() !== '' ? op.unit_code.trim() : 'UNIT-DEFAULT';
@@ -495,6 +521,7 @@ const FabricPulseDashboard = () => {
         });
       }
 
+      // Populate lines from API when unit and floor are selected
       if (selectedUnit && selectedUnit.trim() !== '' && selectedFloor && selectedFloor.trim() !== '' && memoizedLinesFromApi.length) {
         if (!hierarchy[selectedUnit]) {
           hierarchy[selectedUnit] = {
@@ -505,30 +532,45 @@ const FabricPulseDashboard = () => {
             efficiency: 0,
           };
         }
+        if (!hierarchy[selectedUnit].floors[selectedFloor]) {
+          hierarchy[selectedUnit].floors[selectedFloor] = {
+            name: selectedFloor,
+            lines: {},
+            total_production: 0,
+            total_target: 0,
+            efficiency: 0,
+          };
+        }
         const floorLinesObj: Record<string, RTMSLine> = {};
         let floorProd = 0;
         let floorTarget = 0;
         memoizedLinesFromApi.forEach(l => {
           if (l.line_name && typeof l.line_name === 'string' && l.line_name.trim() !== '') {
-            floorLinesObj[l.line_name.trim()] = {
-              name: l.line_name.trim(),
+            const lineName = l.line_name.trim();
+            // Use existing line data from operators if available, else initialize
+            const existingLine = hierarchy[selectedUnit].floors[selectedFloor].lines[lineName] || {
+              name: lineName,
               styles: {},
-              total_production: l.total_production,
-              total_target: l.target,
-              efficiency: l.avg_efficiency,
+              total_production: 0,
+              total_target: 0,
+              efficiency: 0,
             };
-            floorProd += l.total_production;
-            floorTarget += l.target;
+            floorLinesObj[lineName] = {
+              ...existingLine,
+              name: lineName,
+              total_production: existingLine.total_production || l.total_production,
+              total_target: existingLine.total_target || l.target,
+              efficiency: existingLine.efficiency || l.avg_efficiency,
+            };
+            floorProd += floorLinesObj[lineName].total_production;
+            floorTarget += floorLinesObj[lineName].total_target;
           }
         });
 
-        hierarchy[selectedUnit].floors[selectedFloor] = {
-          name: selectedFloor,
-          lines: floorLinesObj,
-          total_production: floorProd,
-          total_target: floorTarget,
-          efficiency: floorTarget > 0 ? (floorProd / floorTarget) * 100 : 0,
-        };
+        hierarchy[selectedUnit].floors[selectedFloor].lines = floorLinesObj;
+        hierarchy[selectedUnit].floors[selectedFloor].total_production = floorProd;
+        hierarchy[selectedUnit].floors[selectedFloor].total_target = floorTarget;
+        hierarchy[selectedUnit].floors[selectedFloor].efficiency = floorTarget > 0 ? (floorProd / floorTarget) * 100 : 0;
 
         const unitFloors = hierarchy[selectedUnit].floors;
         let unitProd = 0;
@@ -540,20 +582,23 @@ const FabricPulseDashboard = () => {
         hierarchy[selectedUnit].total_production = unitProd;
         hierarchy[selectedUnit].total_target = unitTarget;
         hierarchy[selectedUnit].efficiency = unitTarget > 0 ? (unitProd / unitTarget) * 100 : 0;
-      } else {
-        Object.keys(hierarchy).forEach(unitCode => {
-          const unit = hierarchy[unitCode];
-          Object.keys(unit.floors).forEach(floorName => {
-            const floor = unit.floors[floorName];
-            floor.efficiency = floor.total_target > 0 ? (floor.total_production / floor.total_target) * 100 : 0;
-            Object.keys(floor.lines).forEach(lineName => {
-              const line = floor.lines[lineName] as RTMSLine;
-              line.efficiency = line.total_target > 0 ? (line.total_production / line.total_target) * 100 : 0;
-            });
-          });
-          unit.efficiency = unit.total_target > 0 ? (unit.total_production / unit.total_target) * 100 : 0;
-        });
       }
+
+      // Compute efficiencies
+      Object.keys(hierarchy).forEach(unitCode => {
+        const unit = hierarchy[unitCode];
+        Object.keys(unit.floors).forEach(floorName => {
+          const floor = unit.floors[floorName];
+          floor.efficiency = floor.total_target > 0 ? (floor.total_production / floor.total_target) * 100 : 0;
+          Object.keys(floor.lines).forEach(lineName => {
+            const line = floor.lines[lineName] as RTMSLine;
+            line.efficiency = line.total_target > 0 ? (line.total_production / line.total_target) * 100 : 0;
+          });
+        });
+        unit.efficiency = unit.total_target > 0 ? (unit.total_production / unit.total_target) * 100 : 0;
+      });
+
+      console.log('hierarchyData:', hierarchy);
 
       const underperformers = (Array.isArray(memoizedOperators) ? memoizedOperators : [])
         .filter(op => op.efficiency < 85)
@@ -762,41 +807,57 @@ const FabricPulseDashboard = () => {
   };
 
   const getProductionBarData = () => {
-    if (!hierarchyData || !selectedUnit || selectedUnit.trim() === '') return null;
+    if (!hierarchyData || !selectedUnit || selectedUnit.trim() === '') {
+      console.log('getProductionBarData: No unit selected or hierarchyData empty');
+      return null;
+    }
     const unit = hierarchyData[selectedUnit];
-    if (!unit) return null;
+    if (!unit) {
+      console.log('getProductionBarData: Unit not found in hierarchyData', { selectedUnit });
+      return null;
+    }
 
     if (!selectedFloor || selectedFloor.trim() === '') {
       const floors = Object.values(unit.floors).filter((floor): floor is RTMSFloor => !!floor && floor.name && floor.name.trim() !== '');
-      return {
+      if (floors.length === 0) {
+        console.log('getProductionBarData: No valid floors for unit', { selectedUnit });
+        return null;
+      }
+      const floorData = {
         labels: floors.map(floor => floor.name || 'FLOOR-DEFAULT'),
         datasets: [
           {
             label: 'Production (Pieces)',
             data: floors.map(floor => floor.total_production || 0),
-            backgroundColor: floors.map(floor => (floor.efficiency < 85 ? 'hsl(0,84%,60%)' : 'hsl(142,71%,45%)')),
-            borderColor: floors.map(floor => (floor.efficiency < 85 ? 'hsl(0,84%,70%)' : 'hsl(142,71%,55%)')),
+            backgroundColor: floors.map((_, index) => COLOR_PALETTE[index % COLOR_PALETTE.length]),
+            borderColor: floors.map((_, index) => COLOR_PALETTE[index % COLOR_PALETTE.length].replace('50%)', '60%)')),
             borderWidth: 2,
             borderRadius: 6,
             borderSkipped: false,
           },
         ],
       };
+      console.log('getProductionBarData (floors):', floorData);
+      return floorData;
     }
 
     const floor = unit.floors[selectedFloor];
-    if (!floor) return null;
+    if (!floor) {
+      console.log('getProductionBarData: Floor not found in unit', { selectedUnit, selectedFloor });
+      return null;
+    }
 
-    if (!selectedLine || selectedLine.trim() === '') {
-      const linesArr = Object.values(floor.lines).filter((line): line is RTMSLine => !!line && line.name && line.name.trim() !== '');
+    const linesArr = Object.values(floor.lines).filter((line): line is RTMSLine => !!line && line.name && line.name.trim() !== '');
+    if (linesArr.length === 0) {
+      console.log('getProductionBarData: No valid lines for floor', { selectedUnit, selectedFloor });
       return {
-        labels: linesArr.map(line => line.name || 'LINE-DEFAULT'),
+        labels: ['NO-DATA'],
         datasets: [
           {
             label: 'Production (Pieces)',
-            data: linesArr.map(line => line.total_production || 0),
-            backgroundColor: linesArr.map(line => (line.efficiency < 85 ? 'hsl(0,84%,60%)' : 'hsl(142,71%,45%)')),
-            borderColor: linesArr.map(line => (line.efficiency < 85 ? 'hsl(0,84%,70%)' : 'hsl(142,71%,55%)')),
+            data: [0],
+            backgroundColor: [COLOR_PALETTE[0]],
+            borderColor: [COLOR_PALETTE[0].replace('50%)', '60%)')],
             borderWidth: 2,
             borderRadius: 6,
             borderSkipped: false,
@@ -805,7 +866,22 @@ const FabricPulseDashboard = () => {
       };
     }
 
-    return null;
+    const lineData = {
+      labels: linesArr.map(line => line.name || 'LINE-DEFAULT'),
+      datasets: [
+        {
+          label: 'Production (Pieces)',
+          data: linesArr.map(line => line.total_production || 0),
+          backgroundColor: linesArr.map((_, index) => COLOR_PALETTE[index % COLOR_PALETTE.length]),
+          borderColor: linesArr.map((_, index) => COLOR_PALETTE[index % COLOR_PALETTE.length].replace('50%)', '60%)')),
+          borderWidth: 2,
+          borderRadius: 6,
+          borderSkipped: false,
+        },
+      ],
+    };
+    console.log('getProductionBarData (lines):', lineData);
+    return lineData;
   };
 
   const chartOptions = {
@@ -920,7 +996,7 @@ const FabricPulseDashboard = () => {
             </h1>
             <p className="text-xs sm:text-sm lg:text-base text-muted-foreground flex items-center gap-2">
               <Database className="h-4 w-4" />
-               Powered By Llama 3.2b AI
+              Powered By Llama 3.2b AI
             </p>
           </div>
         </div>

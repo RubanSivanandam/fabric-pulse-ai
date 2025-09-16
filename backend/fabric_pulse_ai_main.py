@@ -326,35 +326,43 @@ class EnhancedRTMSEngine:
     async def get_floor_names(self, unit_code: str) -> List[str]:
         """Get list of floor names for a unit"""
         try:
-            query = """
-            SELECT DISTINCT [FloorName]
-            FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
-            WHERE [UnitCode] = @unit_code AND [FloorName] IS NOT NULL AND [FloorName] != ''
-            ORDER BY [FloorName]
-            """
+            query = text("""
+                SELECT DISTINCT [FloorName]
+                FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
+                WHERE [UnitCode] = :unit_code
+                  AND [FloorName] IS NOT NULL 
+                  AND [FloorName] != ''
+                ORDER BY [FloorName]
+            """)
+
             with self.engine.connect() as connection:
-                df = pd.read_sql(text(query), connection, params={"unit_code": unit_code})
+                df = pd.read_sql(query, connection, params={"unit_code": unit_code})
                 return df['FloorName'].tolist()
         except Exception as e:
             logger.error(f"❌ Failed to fetch floor names: {e}")
             return []
 
-    async def get_line_names(self, unit_code: str, floor_name: str) -> List[str]:
+    async def get_line_names(self, unit_code: str, floor_name: str) -> list[str]:
         """Get list of line names for a unit and floor"""
         try:
-            query = """
-            SELECT DISTINCT [LineName]
-            FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
-            WHERE [UnitCode] = @unit_code AND [FloorName] = @floor_name 
-            AND [LineName] IS NOT NULL AND [LineName] != ''
-            ORDER BY [LineName]
-            """
+            query = text("""
+                SELECT DISTINCT [LineName]
+                FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
+                WHERE [UnitCode] = :unit_code 
+                  AND [FloorName] = :floor_name
+                  AND [LineName] IS NOT NULL 
+                  AND [LineName] != ''
+                ORDER BY [LineName]
+            """)
+
             with self.engine.connect() as connection:
-                df = pd.read_sql(text(query), connection, params={
-                    "unit_code": unit_code, 
-                    "floor_name": floor_name
-                })
+                df = pd.read_sql(
+                    query, 
+                    connection, 
+                    params={"unit_code": unit_code, "floor_name": floor_name}
+                )
                 return df['LineName'].tolist()
+
         except Exception as e:
             logger.error(f"❌ Failed to fetch line names: {e}")
             return []
