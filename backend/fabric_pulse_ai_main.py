@@ -8,7 +8,7 @@ import logging
 import pandas as pd
 import subprocess
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
 from collections import defaultdict
@@ -54,8 +54,16 @@ app.add_middleware(
 
 # Pydantic models for AI endpoints
 class AISummarizeRequest(BaseModel):
-    text: str
-    length: Optional[str] = "medium"
+    # Keep old text field optional (for free-text summarization)
+    text: Optional[str] = None  
+    length: str = "short"
+
+    # ✅ Add fields for efficiency filters
+    unit_code: Optional[str] = None
+    floor_name: Optional[str] = None
+    line_name: Optional[str] = None
+    operation: Optional[str] = None
+    limit: int = 1000
 
 class AISuggestOperationsRequest(BaseModel):
     context: str
@@ -402,7 +410,6 @@ class EnhancedRTMSEngine:
             return []
 
         try:
-            # FIXED: Use hardcoded date '2025-09-12' instead of GETDATE()
             query = f"""
             SELECT TOP ({limit})
             [LineName], [EmpCode], [EmpName], [DeviceID],
@@ -414,7 +421,7 @@ class EnhancedRTMSEngine:
             [BuyerCode], [ISFinPart], [ISFinOper], [IsRedFlag]
             FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
             WHERE [ReptType] IN ('RTMS', 'RTM5', 'RTM$')
-            AND CAST([TranDate] AS DATE) = '2025-09-12'
+            AND CAST([TranDate] AS DATE) = CAST(GETDATE() AS DATE)
             AND [ProdnPcs] > 0
             AND [EmpCode] IS NOT NULL
             AND [LineName] IS NOT NULL
@@ -495,7 +502,7 @@ class EnhancedRTMSEngine:
             FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
             WHERE [NewOperSeq] IS NOT NULL
             AND [NewOperSeq] != ''
-            AND CAST([TranDate] AS DATE) = '2025-09-12'
+            AND CAST([TranDate] AS DATE) = CAST(GETDATE() AS DATE)
             ORDER BY [NewOperSeq]
             """
             with self.engine.connect() as connection:
@@ -565,7 +572,7 @@ class EnhancedRTMSEngine:
             "whatsapp_disabled": self.whatsapp_disabled,
             "analysis_timestamp": datetime.now().isoformat(),
             "records_analyzed": len(data),
-            "data_date": "2025-09-12"  # Fixed data date
+            "data_date": date.today().strftime("%Y-%m-%d") 
         }
 
     def _get_efficiency_status(self, efficiency: float) -> str:
@@ -684,17 +691,84 @@ rtms_engine = EnhancedRTMSEngine()
 # AI Endpoints
 @app.post("/api/ai/summarize")
 async def ai_summarize(request: AISummarizeRequest, background_tasks: BackgroundTasks):
-    """Summarize text using Ollama AI"""
+    """Summarize efficiency analysis using Ollama AI"""
     try:
-        if len(request.text) > 10000:
-            raise HTTPException(status_code=400, detail="Text too long (max 10,000 characters)")
-        
-        summary = await rtms_engine.ai_service.summarize_text(request.text, request.length)
-        return {"summary": summary}
-    
+        if request.text:  
+            # ✅ Case 1: Summarize free text
+            if len(request.text) > 10000:
+                raise HTTPException(status_code=400, detail="Text too long (max 10,000 characters)")
+            
+            summary = await rtms_engine.ai_service.summarize_text(
+                request.text,
+                request.length
+            )
+
+        else:
+            # ✅ Case 2: Summarize efficiency analysis (with optional filters)
+            data = await rtms_engine.fetch_production_data(
+                unit_code=request.unit_code if request.unit_code else None,
+                floor_name=request.floor_name if request.floor_name else None,
+                line_name=request.line_name if request.line_name else None,
+                operation=request.operation if request.operation else None,
+                limit=request.limit
+            )
+
+            logger.info(f"Fetched {len(data)} records for summarization")
+
+            if not data:
+                return {
+                    "status": "success",
+                    "summary": "No production data available for the given filters (or today’s date).",
+                    "filters_applied": {
+                        "unit_code": request.unit_code,
+                        "floor_name": request.floor_name,
+                        "line_name": request.line_name,
+                        "operation": request.operation
+                    }
+                }
+
+            # ✅ Limit BEFORE analysis
+            max_records = 100  # adjust as needed
+            data = data[:max_records]
+
+            # Run analysis
+            analysis = rtms_engine.process_efficiency_analysis(data)
+
+            # Convert to text
+            analysis_text = str(analysis)
+
+            # ✅ Truncate if still too long
+            if len(analysis_text) > 10000:
+                logger.warning(f"Analysis text too large ({len(analysis_text)} chars). Truncating...")
+                analysis_text = analysis_text[:8000] + "\n...[TRUNCATED]..."
+
+            # Summarize
+            summary = await rtms_engine.ai_service.summarize_text(
+                analysis_text,
+                request.length
+            )
+
+        return {
+            "status": "success",
+            "summary": summary,
+            "filters_applied": {
+                "unit_code": request.unit_code,
+                "floor_name": request.floor_name,
+                "line_name": request.line_name,
+                "operation": request.operation
+            }
+        }
+
+    except HTTPException:
+        # ✅ Re-raise FastAPI errors (e.g., 400 Bad Request) untouched
+        raise
     except Exception as e:
-        logger.error(f"AI summarization failed: {e}")
-        raise HTTPException(status_code=500, detail="AI summarization failed")
+        logger.error(f"AI summarization failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"AI summarization failed: {str(e)}"
+        )
+
 
 @app.post("/api/ai/suggest_ops")
 async def ai_suggest_operations(request: AISuggestOperationsRequest):
@@ -737,7 +811,7 @@ async def get_service_status():
         "whatsapp_disabled": rtms_engine.whatsapp_disabled,
         "database_connected": rtms_engine.engine is not None,
         "bot_name": "Fabric Pulse AI Bot",
-        "data_date": "2025-09-12",  # Fixed data date
+        "data_date": date.today().strftime("%Y-%m-%d") ,  # Fixed to today's date
         "features": ["AI Insights", "WhatsApp Alerts", "Real-time Monitoring", "Dependent Filters"],
         "last_fetch": rtms_engine.last_fetch_time.isoformat() if rtms_engine.last_fetch_time else None,
         "timestamp": datetime.now().isoformat()
@@ -804,7 +878,7 @@ async def get_operations(unit_code: str = Query(None), floor_name: str = Query(N
             "status": "success",
             "data": operations,
             "count": len(operations),
-            "data_date": "2025-09-12",  # Fixed data date
+           "data_date": date.today().strftime("%Y-%m-%d") ,
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:

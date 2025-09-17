@@ -281,7 +281,7 @@ def get_router():
                 SUM(CASE WHEN production >= target_production THEN 1 ELSE 0 END) as lines_on_target,
                 COUNT(CASE WHEN efficiency < ? THEN 1 END) as alerts_generated
             FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
-            WHERE production_date = '2025-09-12'
+            WHERE production_date = CAST(GETDATE() AS DATE)
             """
             
             cursor.execute(query, (config.alerts.critical_threshold,))
@@ -326,7 +326,7 @@ def get_router():
                 pr.floor_name
             FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction] pr
             LEFT JOIN [ITR_PRO_IND].[dbo].[Employees] e ON pr.employee_code = e.employee_code
-            WHERE pr.TranDate = '2025-09-12'
+            WHERE pr.TranDate = CAST(GETDATE() AS DATE)
             """
             
             cursor.execute(query)
@@ -372,9 +372,9 @@ def get_router():
                 SUM(target_production) as target_production,
                 AVG(efficiency) as avg_efficiency,
                 COUNT(DISTINCT employee_code) as operator_count
-            FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
-            WHERE TranDate = '2025-09-12'
-            GROUP BY line_name, unit_code
+                FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
+                WHERE TranDate = CAST(GETDATE() AS DATE)
+                GROUP BY line_name, unit_code
             """
             
             cursor.execute(query)
