@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 # FastAPI app
 app = FastAPI(
-    title="Fabric Pulse AI - RTMS Monitoring System",
+    title="AI Powered - RTMS System",
     description="Real-time production monitoring with Ollama AI insights and WhatsApp alerts",
     version="4.0.0",
     docs_url="/api/docs",

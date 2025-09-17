@@ -33,11 +33,12 @@ import {
   Legend,
   BarElement,
 } from 'chart.js';
+import zoomPlugin from 'chartjs-plugin-zoom';
 import { toast } from '@/components/ui/use-toast';
 import { isEqual } from 'lodash';
 
-// Chart.js register
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, BarElement);
+// Register Chart.js components and zoom plugin
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, BarElement, zoomPlugin);
 
 // Types
 interface RTMSEmployee {
@@ -239,7 +240,6 @@ const fetchLinesApi = async (unitCode: string, floorName: string): Promise<LineD
   if (!response.ok) throw new Error('Failed to fetch lines from API');
   const result = await response.json();
   console.log('fetchLinesApi result:', result);
-  // Transform string array into LineData array
   const lines = Array.isArray(result.data)
     ? result.data
         .filter((line: any) => line && typeof line === 'string' && line.trim() !== '')
@@ -547,7 +547,6 @@ const FabricPulseDashboard = () => {
         memoizedLinesFromApi.forEach(l => {
           if (l.line_name && typeof l.line_name === 'string' && l.line_name.trim() !== '') {
             const lineName = l.line_name.trim();
-            // Use existing line data from operators if available, else initialize
             const existingLine = hierarchy[selectedUnit].floors[selectedFloor].lines[lineName] || {
               name: lineName,
               styles: {},
@@ -776,7 +775,10 @@ const FabricPulseDashboard = () => {
 
   // Chart data builders
   const getEmployeeEfficiencyBarData = () => {
-    if (!rtmsData || !filteredUnderperformers.length) return null;
+    if (!rtmsData || !filteredUnderperformers.length) {
+      console.log('getEmployeeEfficiencyBarData: No data available', { rtmsData, filteredUnderperformers });
+      return null;
+    }
 
     const employees = filteredUnderperformers.slice(0, 10);
     const maxProduction = Math.max(...employees.map(emp => emp.production || 0), 0);
@@ -790,7 +792,7 @@ const FabricPulseDashboard = () => {
     const backgroundColors = efficiencyData.map(eff => (eff < 85 ? 'hsl(0, 84%, 60%)' : 'hsl(142, 71%, 45%)'));
     const borderColors = efficiencyData.map(eff => (eff < 85 ? 'hsl(0, 84%, 70%)' : 'hsl(142, 71%, 55%)'));
 
-    return {
+    const data = {
       labels,
       datasets: [
         {
@@ -804,6 +806,8 @@ const FabricPulseDashboard = () => {
         },
       ],
     };
+    console.log('getEmployeeEfficiencyBarData:', data);
+    return data;
   };
 
   const getProductionBarData = () => {
@@ -850,20 +854,7 @@ const FabricPulseDashboard = () => {
     const linesArr = Object.values(floor.lines).filter((line): line is RTMSLine => !!line && line.name && line.name.trim() !== '');
     if (linesArr.length === 0) {
       console.log('getProductionBarData: No valid lines for floor', { selectedUnit, selectedFloor });
-      return {
-        labels: ['NO-DATA'],
-        datasets: [
-          {
-            label: 'Production (Pieces)',
-            data: [0],
-            backgroundColor: [COLOR_PALETTE[0]],
-            borderColor: [COLOR_PALETTE[0].replace('50%)', '60%)')],
-            borderWidth: 2,
-            borderRadius: 6,
-            borderSkipped: false,
-          },
-        ],
-      };
+      return null;
     }
 
     const lineData = {
@@ -882,6 +873,73 @@ const FabricPulseDashboard = () => {
     };
     console.log('getProductionBarData (lines):', lineData);
     return lineData;
+  };
+
+  const getOverallEmployeeEfficiencyData = () => {
+    if (!memoizedOperators || !selectedUnit || selectedUnit.trim() === '') {
+      console.log('getOverallEmployeeEfficiencyData: No operators or unit selected', { memoizedOperators, selectedUnit });
+      return null;
+    }
+
+    // Filter operators based on selections
+    let filteredOperators = memoizedOperators.filter(op => 
+      op.unit_code === selectedUnit &&
+      (!selectedFloor || op.floor_name === selectedFloor) &&
+      (!selectedLine || op.line_name === selectedLine) &&
+      (!selectedNewOperSeq || selectedNewOperSeq === 'ALL-OPERATIONS' || op.new_oper_seq === selectedNewOperSeq)
+    );
+
+    if (!filteredOperators.length) {
+      console.log('getOverallEmployeeEfficiencyData: No operators after filtering', { selectedUnit, selectedFloor, selectedLine, selectedNewOperSeq });
+      return null;
+    }
+
+    // Find the top performer
+    const topPerformer = filteredOperators.reduce((prev, curr) => 
+      (prev.efficiency > curr.efficiency ? prev : curr), filteredOperators[0]
+    );
+
+    // Normalize efficiencies relative to top performer (100%)
+    const maxEfficiency = topPerformer.efficiency || 100;
+    const normalizedData = filteredOperators.map(op => ({
+      ...op,
+      normalizedEfficiency: maxEfficiency > 0 ? (op.efficiency / maxEfficiency) * 100 : op.efficiency,
+    }));
+
+    // Sort by normalized efficiency (descending) and limit to top 20 for display
+    const sortedData = normalizedData
+      .sort((a, b) => b.normalizedEfficiency - a.normalizedEfficiency)
+      .slice(0, 20);
+
+    const labels = sortedData.map(op => `${op.emp_name} (${op.line_name}, ${op.new_oper_seq})`);
+    const efficiencyData = sortedData.map(op => op.normalizedEfficiency);
+
+    // Assign colors: Green for top performer (100%), Yellow for 85–100%, Red for <85%
+    const backgroundColors = sortedData.map(op => {
+      if (op.emp_code === topPerformer.emp_code) return 'hsl(120, 60%, 50%)'; // Green for top performer
+      return op.efficiency >= 85 ? 'hsl(60, 70%, 50%)' : 'hsl(0, 84%, 60%)'; // Yellow for 85–100%, Red for <85%
+    });
+    const borderColors = sortedData.map(op => {
+      if (op.emp_code === topPerformer.emp_code) return 'hsl(120, 60%, 60%)';
+      return op.efficiency >= 85 ? 'hsl(60, 70%, 60%)' : 'hsl(0, 84%, 70%)';
+    });
+
+    const data = {
+      labels,
+      datasets: [
+        {
+          label: 'Normalized Efficiency %',
+          data: efficiencyData,
+          backgroundColor: backgroundColors,
+          borderColor: borderColors,
+          borderWidth: 2,
+          borderRadius: 6,
+          borderSkipped: false,
+        },
+      ],
+    };
+    console.log('getOverallEmployeeEfficiencyData:', data);
+    return data;
   };
 
   const chartOptions = {
@@ -913,7 +971,7 @@ const FabricPulseDashboard = () => {
           label: (context: any) => {
             const value = context.formattedValue;
             const label = context.dataset.label;
-            return `${label}: ${value}${label.includes('Efficiency') ? '%' : ' pieces'}`;
+            return `${label}: ${value}%`;
           },
         },
       },
@@ -928,9 +986,86 @@ const FabricPulseDashboard = () => {
         grid: { color: 'hsl(220, 30%, 18%)', lineWidth: 1 },
         ticks: { color: 'hsl(0,0%,70%)', font: { size: 12, weight: 400 } },
         border: { color: 'hsl(220,30%,18%)' },
+        min: 0,
+        max: 100,
+        title: {
+          display: true,
+          text: 'Efficiency (%)',
+          color: 'hsl(0,0%,70%)',
+          font: { size: 12, weight: 500 },
+        },
       },
     },
     interaction: { intersect: false, mode: 'index' as const },
+  };
+
+  const productionChartOptions = {
+    ...chartOptions,
+    plugins: {
+      ...chartOptions.plugins,
+      legend: {
+        display: false, // Disable legend for production graph
+      },
+      tooltip: {
+        ...chartOptions.plugins.tooltip,
+        callbacks: {
+          label: (context: any) => {
+            const value = context.formattedValue;
+            const label = context.dataset.label;
+            return `${label}: ${value} pieces`;
+          },
+        },
+      },
+    },
+    scales: {
+      ...chartOptions.scales,
+      y: {
+        ...chartOptions.scales.y,
+        min: 0,
+        max: undefined, // Remove max to allow dynamic scaling
+        title: {
+          display: true,
+          text: 'Production (Pieces)',
+          color: 'hsl(0,0%,70%)',
+          font: { size: 12, weight: 500 },
+        },
+      },
+    },
+  };
+
+  const overallEfficiencyChartOptions = {
+    ...chartOptions,
+    plugins: {
+      ...chartOptions.plugins,
+      zoom: {
+        zoom: {
+          wheel: {
+            enabled: true,
+            speed: 0.1,
+          },
+          pinch: {
+            enabled: true,
+          },
+          mode: 'x' as const,
+        },
+        pan: {
+          enabled: true,
+          mode: 'x' as const,
+        },
+      },
+    },
+    scales: {
+      ...chartOptions.scales,
+      x: {
+        ...chartOptions.scales.x,
+        ticks: {
+          ...chartOptions.scales.x.ticks,
+          autoSkip: false,
+          maxRotation: 45,
+          minRotation: 45,
+        },
+      },
+    },
   };
 
   // Alerts behavior
@@ -992,7 +1127,7 @@ const FabricPulseDashboard = () => {
 
           <div>
             <h1 className="text-xl sm:text-2xl lg:text-4xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-              RTMS Monitoring System
+              RTMS System 
             </h1>
             <p className="text-xs sm:text-sm lg:text-base text-muted-foreground flex items-center gap-2">
               <Database className="h-4 w-4" />
@@ -1185,12 +1320,16 @@ const FabricPulseDashboard = () => {
           <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.5 }}>
             <Card className="shadow-card glass-card border-primary/20">
               <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-primary"><BarChart3 className="h-5 w-5" />Employee Efficiency (Real-time)</CardTitle>
+                <CardTitle className="flex items-center gap-2 text-primary"><BarChart3 className="h-5 w-5" />Employee Efficiency under 85% from the Top Performer</CardTitle>
                 <p className="text-sm text-muted-foreground">Red bars indicate below 85% efficiency threshold</p>
               </CardHeader>
               <CardContent>
                 <div className="h-80">
-                  {getEmployeeEfficiencyBarData() ? <Bar data={getEmployeeEfficiencyBarData()!} options={chartOptions} /> : <div className="flex items-center justify-center h-full text-muted-foreground">No efficiency data available</div>}
+                  {getEmployeeEfficiencyBarData() ? (
+                    <Bar data={getEmployeeEfficiencyBarData()!} options={chartOptions} />
+                  ) : (
+                    <div className="flex items-center justify-center h-full text-muted-foreground">No efficiency data available</div>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -1204,16 +1343,39 @@ const FabricPulseDashboard = () => {
               </CardHeader>
               <CardContent>
                 <div className="h-80">
-                  {getProductionBarData() ? <Bar data={getProductionBarData()!} options={chartOptions} /> : <div className="flex items-center justify-center h-full text-muted-foreground">Select unit to view production distribution</div>}
+                  {getProductionBarData() ? (
+                    <Bar data={getProductionBarData()!} options={productionChartOptions} />
+                  ) : (
+                    <div className="flex items-center justify-center h-full text-muted-foreground">No production data available</div>
+                  )}
                 </div>
               </CardContent>
             </Card>
           </motion.div>
         </div>
 
+        {/* Overall Employee Efficiency Chart */}
+        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.7 }}>
+          <Card className="shadow-card glass-card border-info/20">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-info"><BarChart3 className="h-5 w-5" />Overall Employee Efficiency (Real Time)</CardTitle>
+              <p className="text-sm text-muted-foreground">Green: Top performer (100%), Yellow: 85–100%, Red: Below 85% (Zoom in/out with mouse wheel)</p>
+            </CardHeader>
+            <CardContent>
+              <div className="h-80">
+                {getOverallEmployeeEfficiencyData() ? (
+                  <Bar data={getOverallEmployeeEfficiencyData()!} options={overallEfficiencyChartOptions} />
+                ) : (
+                  <div className="flex items-center justify-center h-full text-muted-foreground">No employee efficiency data available</div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
         {/* Underperformers list */}
         {filteredUnderperformers.length > 0 && (
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.7 }}>
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.8 }}>
             <Card className="shadow-card glass-card border-destructive/20">
               <CardHeader>
                 <CardTitle className="text-destructive flex items-center gap-2"><AlertTriangle className="h-5 w-5" />Efficiency Alerts - Immediate Action Required</CardTitle>
@@ -1227,7 +1389,7 @@ const FabricPulseDashboard = () => {
                       className="flex flex-col lg:flex-row items-start lg:items-center justify-between p-4 border border-destructive/20 rounded-lg bg-destructive/5 backdrop-blur-sm gap-4"
                       initial={{ opacity: 0, x: -20 }}
                       animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.8 + index * 0.05 }}
+                      transition={{ delay: 0.9 + index * 0.05 }}
                     >
                       <div className="space-y-2 flex-1">
                         <div className="flex items-center gap-2 flex-wrap">
@@ -1271,7 +1433,7 @@ const FabricPulseDashboard = () => {
         )}
 
         {/* Recent Alerts */}
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.9 }}>
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 1.0 }}>
           <Card className="shadow-card glass-card">
             <CardHeader>
               <CardTitle className="text-primary flex items-center gap-2"><MessageSquare className="h-5 w-5" />Recent Alerts & Notifications</CardTitle>
@@ -1292,7 +1454,7 @@ const FabricPulseDashboard = () => {
                       }`}
                       initial={{ opacity: 0, x: -20 }}
                       animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 1 + idx * 0.05 }}
+                      transition={{ delay: 1.1 + idx * 0.05 }}
                     >
                       <div className="flex items-start gap-3 flex-1">
                         <Badge variant={alert.severity === 'high' ? 'destructive' : alert.severity === 'medium' ? 'secondary' : 'default'} className="shrink-0 mt-0.5">
