@@ -140,7 +140,7 @@ def should_send_whatsapp(emp_data: dict, line_performers: List[dict]) -> bool:
 class OllamaAIService:
     """Ollama AI Service for local llama-3.2:3b integration"""
     
-    def __init__(self, model: str = "llama-3.2:3b"):
+    def __init__(self, model: str = "llama3.2:3b"):
         self.model = model
         self.available = self._check_ollama_availability()
     
@@ -274,7 +274,7 @@ class EnhancedRTMSEngine:
         self.engine = self._create_database_engine()
         self.last_fetch_time = None
         self.monitoring_active = False
-        self.ai_service = OllamaAIService()
+        self.ai_service = OllamaAIService(config.ai.primary_model)
         
         # WhatsApp notifications disabled flag
         self.whatsapp_disabled = True
