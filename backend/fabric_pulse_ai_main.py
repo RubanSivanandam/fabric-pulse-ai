@@ -736,10 +736,10 @@ async def ai_summarize(request: AISummarizeRequest, background_tasks: Background
             grouped = defaultdict(lambda: {"Eff100": 0, "ProdnPcs": 0})
 
             for row in data:
-                if str(row.get("isFinalPart", "")).upper() == "Y":  # only final parts
-                    key = (row["LineName"], row["StyleNo"])
-                    grouped[key]["Eff100"] += row.get("Eff100", 0) or 0
-                    grouped[key]["ProdnPcs"] += row.get("ProdnPcs", 0) or 0
+                if str(row.ISFinPart).upper() == "Y":
+                    key = (row.LineName, row.StyleNo)  # Use attribute access
+                    grouped[key]["Eff100"] += row.Eff100 or 0
+                    grouped[key]["ProdnPcs"] += row.ProdnPcs or 0
 
             # 🔹 Convert grouped data to text
             lines = []
@@ -761,11 +761,14 @@ async def ai_summarize(request: AISummarizeRequest, background_tasks: Background
             # 🔹 Pass context to AI
             prompt = (
                 "You are analyzing garment factory production efficiency.\n"
-                "The data below represents Garment pieces produced in final parts.\n"
-                "Each record shows total target (Eff100) and actual production (ProdnPcs) "
-                "grouped by LineName and StyleNo.\n"
-                "Please highlight efficiency gaps, underperforming lines, and give insights "
-                "useful for production managers.\n\n"
+                "The data below represents Garment pieces produced in final parts, identified by ISFinPart = 'Y'.\n"
+                "Each record shows the total target (Eff100) and actual production (ProdnPcs) for the final part of a LineName,\n"
+                "along with the corresponding PartName and calculated efficiency (Actual / Target * 100).\n"
+                "A unit consists of different lines, each with various parts. The final part's production determines the line's efficiency.\n"
+                "For example, if a line has multiple operations on a part (e.g., stitching, finishing), the final operator's output (marked by ISFinPart = 'Y')\n"
+                "is used to calculate efficiency.\n"
+                "Please highlight efficiency gaps, underperforming lines, and provide polite, constructive insights to boost the team's morale\n"
+                "and support production managers in improving performance.\n\n"
                 f"{analysis_text}"
             )
 
