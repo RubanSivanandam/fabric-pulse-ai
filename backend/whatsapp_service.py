@@ -71,7 +71,7 @@ class ProductionReadyWhatsAppService:
         self.last_alert_times: Dict[str, datetime] = {}
         self.daily_alert_count: Dict[str, int] = {}
         self.max_alerts_per_day = 50
-        self.min_alert_interval = timedelta(minutes=5)
+        self.min_alert_interval = timedelta(minutes=60)
     
     def _test_connection(self):
         """Test Twilio connection"""

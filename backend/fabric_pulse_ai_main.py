@@ -691,7 +691,7 @@ rtms_engine = EnhancedRTMSEngine()
 # AI Endpoints
 @app.post("/api/ai/summarize")
 async def ai_summarize(request: AISummarizeRequest, background_tasks: BackgroundTasks):
-    """Summarize efficiency analysis using Ollama AI"""
+    """Summarize efficiency analysis using Ollama AI with garment-specific insights"""
     try:
         if request.text:  
             # ✅ Case 1: Summarize free text
@@ -728,25 +728,48 @@ async def ai_summarize(request: AISummarizeRequest, background_tasks: Background
                 }
 
             # ✅ Limit BEFORE analysis
-            max_records = 100  # adjust as needed
+            max_records = 1500
             data = data[:max_records]
 
-            # Run analysis
-            analysis = rtms_engine.process_efficiency_analysis(data)
+            # 🔹 Custom garment aggregation
+            from collections import defaultdict
+            grouped = defaultdict(lambda: {"Eff100": 0, "ProdnPcs": 0})
 
-            # Convert to text
-            analysis_text = str(analysis)
+            for row in data:
+                if str(row.get("isFinalPart", "")).upper() == "Y":  # only final parts
+                    key = (row["LineName"], row["StyleNo"])
+                    grouped[key]["Eff100"] += row.get("Eff100", 0) or 0
+                    grouped[key]["ProdnPcs"] += row.get("ProdnPcs", 0) or 0
+
+            # 🔹 Convert grouped data to text
+            lines = []
+            for (line_name, style_no), agg in grouped.items():
+                target = agg["Eff100"]
+                actual = agg["ProdnPcs"]
+                lines.append(
+                    f"Line {line_name}, Style {style_no}: "
+                    f"Target {target} pcs, Actual {actual} pcs"
+                )
+
+            analysis_text = "Garment production summary (final parts only):\n" + "\n".join(lines)
 
             # ✅ Truncate if still too long
             if len(analysis_text) > 10000:
                 logger.warning(f"Analysis text too large ({len(analysis_text)} chars). Truncating...")
                 analysis_text = analysis_text[:8000] + "\n...[TRUNCATED]..."
 
-            # Summarize
-            summary = await rtms_engine.ai_service.summarize_text(
-                analysis_text,
-                request.length
+            # 🔹 Pass context to AI
+            prompt = (
+                "You are analyzing garment factory production efficiency.\n"
+                "The data below represents Garment pieces produced in final parts.\n"
+                "Each record shows total target (Eff100) and actual production (ProdnPcs) "
+                "grouped by LineName and StyleNo.\n"
+                "Please highlight efficiency gaps, underperforming lines, and give insights "
+                "useful for production managers.\n\n"
+                f"{analysis_text}"
             )
+
+            summary = await rtms_engine.ai_service.summarize_text(prompt, request.length)
 
         return {
             "status": "success",
@@ -760,7 +783,6 @@ async def ai_summarize(request: AISummarizeRequest, background_tasks: Background
         }
 
     except HTTPException:
-        # ✅ Re-raise FastAPI errors (e.g., 400 Bad Request) untouched
         raise
     except Exception as e:
         logger.error(f"AI summarization failed: {e}", exc_info=True)
@@ -768,6 +790,7 @@ async def ai_summarize(request: AISummarizeRequest, background_tasks: Background
             status_code=500,
             detail=f"AI summarization failed: {str(e)}"
         )
+
 
 
 @app.post("/api/ai/suggest_ops")
