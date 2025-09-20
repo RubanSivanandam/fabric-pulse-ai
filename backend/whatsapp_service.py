@@ -3,6 +3,8 @@ Enhanced WhatsApp Service for Professional Hourly Reports
 Replaces existing WhatsApp logic with professional PDF/CSV reporting
 """
 
+from collections import defaultdict
+from email.mime import message
 import logging
 import asyncio
 import json
@@ -467,6 +469,82 @@ No action needed - continue with current operations."""
             # media_url=[...]   # disabled for local
         )
         return message_obj.sid
+    # Add this method to the ProductionReadyWhatsAppService class
+# Add this method to the ProductionReadyWhatsAppService class
+async def fetch_supervisors(self) -> Dict[str, List[str]]:
+    """Fetch supervisors and their phone numbers from database"""
+    try:
+        from fabric_pulse_ai_main import rtms_engine
+        
+        if not rtms_engine or not rtms_engine.engine:
+            logger.error("❌ Database engine not available for supervisors")
+            return {}
+        
+        query = """
+        SELECT LineName, PhoneNumber 
+        FROM [ITR_PRO_IND].[dbo].[RTMS_SupervisorsDet1]
+        WHERE PhoneNumber IS NOT NULL AND PhoneNumber != ''
+        """
+        
+        with rtms_engine.engine.connect() as connection:
+            df = pd.read_sql(query, connection)
+        
+        # Group phone numbers by line
+        supervisors = {}
+        for _, row in df.iterrows():
+            line = row['LineName']
+            phone = row['PhoneNumber']
+            
+            # Format phone number to E.164 format if needed
+            if not phone.startswith('+'):
+                phone = f"+91{phone}"  # Assuming Indian numbers
+            
+            if line not in supervisors:
+                supervisors[line] = []
+            supervisors[line].append(phone)
+        
+        logger.info(f"📋 Fetched supervisors for {len(supervisors)} lines")
+        return supervisors
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to fetch supervisors: {e}")
+        return {}
+
+# Modify the generate_and_send_reports method to use supervisors
+async def generate_and_send_reports(self, test_mode: bool = False) -> Dict[str, Any]:
+    """Generate and send hourly reports to supervisors"""
+    timestamp = datetime.now()
+    logger.info(f"🕐 Starting report generation at {timestamp}")
+    
+    try:
+        # Fetch flagged employees and supervisors
+        flagged_employees = await self.fetch_flagged_employees()
+        supervisors = await self.fetch_supervisors()
+        
+        # Group by line and style
+        line_reports = self.group_employees_by_line_and_style(flagged_employees)
+        
+        # Determine recipients
+        if test_mode:
+            recipients = self.test_numbers
+        else:
+            # Get unique phone numbers for lines with flagged employees
+            recipients = set()
+            for line_key in line_reports.keys():
+                line_name = line_key.split('_')[1]  # Extract line name from key
+                if line_name in supervisors:
+                    recipients.update(supervisors[line_name])
+            
+            # Fallback to test numbers if no supervisors found
+            if not recipients:
+                recipients = self.test_numbers
+                logger.warning("⚠️ No supervisors found, using test numbers")
+    except Exception as e:
+        logger.error(f"❌ Failed to fetch supervisors: {e}")
+        return {}
+        
+        # Rest of the method remains the same...
+        # [Keep the existing code for PDF generation, message creation, etc.]
 
     
     # async def send_whatsapp_report(self, pdf_path: Path, message: str, phone_number: str) -> bool:
@@ -627,6 +705,57 @@ No action needed - continue with current operations."""
             "next_scheduled_report": "Every hour at :00 minutes",
             "configuration_valid": self._is_config_valid()
         }
+    def generate_diagnostic_insights(self, line_reports: Dict[str, "LineReport"]) -> List[str]:
+        """Generate diagnostic insights about production issues"""
+        insights = []
 
+        # Analyze common patterns in flagged employees
+        operation_issues = defaultdict(int)
+        style_issues = defaultdict(int)
+
+        for line_report in line_reports.values():
+            for style, employees in line_report.style_groups.items():
+                for emp in employees:
+                    operation_issues[emp.new_oper_seq] += 1
+                    style_issues[emp.style_no] += 1
+
+        # Identify most problematic operations
+        if operation_issues:
+            top_issue = max(operation_issues.items(), key=lambda x: x[1])
+            insights.append(f"Most problematic operation: {top_issue[0]} ({top_issue[1]} issues)")
+
+        # Identify most problematic styles
+        if style_issues:
+            top_style = max(style_issues.items(), key=lambda x: x[1])
+            insights.append(f"Most problematic style: {top_style[0]} ({top_style[1]} issues)")
+
+        return insights
+
+    async def generate_motivational_message(self, line_reports: Dict[str, "LineReport"]) -> str:
+        """Generate AI-powered motivational WhatsApp message with diagnostics"""
+        try:
+            if not line_reports:
+                return """🎉 Excellent news! All production lines are performing above target efficiency this hour."""
+
+            # Get diagnostic insights
+            diagnostics = self.generate_diagnostic_insights(line_reports)
+
+            total_flagged = sum(report.total_flagged for report in line_reports.values())
+            line_count = len(line_reports)
+
+            message = f"""Hello Supervisor! 📊
+
+Hourly production report:
+- {total_flagged} team members across {line_count} lines need support
+- Key insights: {', '.join(diagnostics[:2])}
+
+With your guidance, the team can quickly improve! 🚀
+
+Review the attached report for details."""
+            return message
+
+        except Exception as e:
+            logger.error(f"❌ Failed to generate motivational message: {e}")
+            return "Please find the attached hourly production report."
 # Global service instance
 whatsapp_service = ProductionReadyWhatsAppService()

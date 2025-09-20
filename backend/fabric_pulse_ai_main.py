@@ -54,7 +54,7 @@ import urllib.parse
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from ultra_advanced_chatbot import ultra_chatbot, make_ultra_advanced_pdf_report
-
+TEST_NUMBERS = ["+919943625493", "+918939990949"]
 
 # Setup logging
 logging.basicConfig(
