@@ -23,6 +23,15 @@ from ollama_client import AIRequest
 from sympy import sqf
 from ultra_advanced_chatbot import UltraHighPerformanceChatbot, make_ultra_advanced_pdf_report
 from ultra_advanced_chatbot import ultra_high_performance_chatbot, make_ultra_advanced_pdf_report
+from fastapi import Body, HTTPException
+from fastapi.responses import StreamingResponse
+from typing import Optional, List
+import json
+import os
+import time
+import math
+import tempfile
+import logging
 
 ultra_high_perf_chatbot = UltraHighPerformanceChatbot()
 
@@ -1360,6 +1369,8 @@ logger = logging.getLogger("ultra_advanced_chatbot")
 
 
 # Ultra-Advanced Chatbot with Safe Chunking
+
+
 @app.post("/api/ai/ultra_chatbot")
 async def ultra_advanced_ai_chatbot(
     query: str = Body(..., description="Your question about production analytics"),
@@ -1375,37 +1386,21 @@ async def ultra_advanced_ai_chatbot(
     reasoning_mode: str = Body("deep", description="Reasoning depth: basic, deep, expert")
 ):
     """
-    Ultra-Advanced Chatbot that:
-    - pulls production rows (same style as predict_efficiency),
-    - chunks them to fit model context,
-    - feeds chunks to local Ollama (llama3.2:3b) via generate_completion (streaming),
-    - streams JSON response token-by-token (suitable for ChatGPT-like typing animation),
-    - optionally produces CSV or PDF export (uses existing PDF helper).
+    Ultra-Advanced Chatbot endpoint (safe chunking, summarization, streaming to Ollama).
     """
 
-    # NOTE: this function purposely imports locally so it's self-contained when pasted.
-    # import os
-    # import json
-    # import time
-    # import pandas as pd
-    # import pyodbc
-    # from datetime import date
-    # uses your OllamaClient.generate_completion implementation
-    # from pathlib import Path
+    # local imports and logging
+    import pandas as pd
+    import pyodbc
+    import httpx
+    from datetime import datetime
+    from reportlab.pdfgen import canvas  # fallback PDF generator if custom helper missing
 
-    # compatibility PDF helper (exists in your repo)
-    try:
-        from fabric_pulse_ai_main import make_ultra_advanced_pdf_report  # if in same module this will work
-    except Exception:
-        # fallback - if helper is in another module you'll already have it; otherwise skip pdf support gracefully
-        try:
-            from ultra_advanced_chatbot import make_ultra_advanced_pdf_report
-        except Exception:
-            make_ultra_advanced_pdf_report = None
+    logger = logging.getLogger("ultra_advanced_chatbot")
 
     start_time = time.time()
 
-    # enforce limits
+    # Safeguard max_records
     try:
         max_records = int(max_records)
     except Exception:
@@ -1415,13 +1410,49 @@ async def ultra_advanced_ai_chatbot(
     if max_records > 3000:
         max_records = 3000
 
+    # Essential columns to keep for context (minimize prompt size)
+    ESSENTIAL_COLS = [
+        "TranDate", "LineName", "StyleNo", "PartName",
+        "ProdnPcs", "EffPer", "SAM", "UnitCode", "FloorName", "EmpCode", "EmpName"
+    ]
+
+    # Try to locate PDF helper from your codebase
+    make_pdf_helper = None
     try:
-        # ------------------------
-        # Build SQL (same logic as predict_efficiency)
-        # ------------------------
+        from ultra_advanced_chatbot import make_ultra_advanced_pdf_report
+        make_pdf_helper = make_ultra_advanced_pdf_report
+    except Exception:
+        try:
+            # maybe helper in same module
+            from fabric_pulse_ai_main import make_ultra_advanced_pdf_report
+            make_pdf_helper = make_ultra_advanced_pdf_report
+        except Exception:
+            make_pdf_helper = None
+
+    # Resolve DB connection string defensively
+    try:
+        conn_str = config.database.get_connection_string()
+    except Exception:
+        try:
+            conn_str = config.get_connection_string()
+        except Exception:
+            conn_str = os.environ.get("DATABASE_URL") or os.environ.get("DB_CONN")
+
+    if not conn_str:
+        logger.error("Database connection string not found (config.database or env DATABASE_URL/DB_CONN)")
+        raise HTTPException(status_code=500, detail="Database connection string not found")
+
+    try:
+        # -------------------------
+        # 1) Fetch data from DB (same style as predict_efficiency)
+        # -------------------------
         sql = f"""
         SELECT TOP ({max_records})
-            *
+            LineName, EmpCode, EmpName, DeviceID,
+            StyleNo, OrderNo, Operation, SAM,
+            Eff100, Eff75, ProdnPcs, EffPer,
+            OperSeq, UsedMin, TranDate, UnitCode, 
+            PartName, FloorName, ReptType, PartSeq
         FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
         WHERE [TranDate] >= DATEADD(MONTH, -{int(data_range_months)}, CAST(GETDATE() AS DATE))
           AND ProdnPcs > 0
@@ -1429,7 +1460,7 @@ async def ultra_advanced_ai_chatbot(
           AND StyleNo IS NOT NULL
         """
 
-        # dynamic filters (same style as predict_efficiency)
+        # dynamic filters (kept simple; follow your existing code pattern)
         conditions = []
         if unit_code:
             conditions.append(f"UnitCode = '{unit_code}'")
@@ -1447,37 +1478,19 @@ async def ultra_advanced_ai_chatbot(
         if conditions:
             sql += " AND " + " AND ".join(conditions)
 
-        sql += " ORDER BY TranDate DESC, LineName, StyleNo"
+        sql += " ORDER BY TranDate DESC"
 
-        # ------------------------
-        # Resolve DB connection string robustly (defensive)
-        # ------------------------
-        conn_str = None
-        try:
-            # common case in your repo: config.database.get_connection_string()
-            conn_str = config.database.get_connection_string()
-        except Exception:
-            try:
-                # alternate shape: config.get_connection_string()
-                conn_str = config.get_connection_string()
-            except Exception:
-                # final fallback: environment variable
-                conn_str = os.environ.get("DATABASE_URL") or os.environ.get("DB_CONN") or None
-
-        if not conn_str:
-            raise RuntimeError("Database connection string not found in config / env (config.database or config.get_connection_string or DATABASE_URL)")
-
-        # Connect and read
         conn = pyodbc.connect(conn_str)
-        df = pd.read_sql(sql, conn)  # pandas will warn about non-SQLAlchemy; acceptable here
+        df = pd.read_sql(sql, conn)  # pandas will warn about DB-API, acceptable here
         conn.close()
 
-        logger.info(f"✅ Retrieved {len(df)} records for chatbot (limit {max_records})")
+        logger.info(f"✅ Retrieved {len(df)} records from DB")
 
         if df.empty:
             return {
                 "status": "no_data",
-                "answer": "No production data found for the specified filters.",
+                "answer": f"No production data found for the specified filters ({data_range_months} months).",
+                "records_analyzed": 0,
                 "filters_applied": {
                     "unit_code": unit_code,
                     "floor_name": floor_name,
@@ -1488,80 +1501,236 @@ async def ultra_advanced_ai_chatbot(
                 }
             }
 
-        # ------------------------
-        # Chunk the data to safe sized context pieces (avoid Ollama truncation)
-        # Choose a conservative chunk (e.g. 250-350 rows). Adjust if you find truncation logs.
-        # ------------------------
-        section_size = 300
-        context_sections = []
-        for i in range(0, len(df), section_size):
-            chunk = df.iloc[i:i+section_size]
-            # stringify as CSV snippet (compact, predictable)
-            context_sections.append(chunk.to_csv(index=False))
+        # Keep only essential columns that exist in df
+        keep_cols = [c for c in ESSENTIAL_COLS if c in df.columns]
+        df_small = df[keep_cols].copy()
 
-        logger.info(f"✅ Split into {len(context_sections)} context chunks (section_size={section_size})")
+        # -------------------------
+        # 2) Chunking & local summarization
+        # -------------------------
+        SECTION_SIZE = 100  # conservative chunk size to keep prompt small
+        chunk_summaries: List[str] = []
 
-        # ------------------------
-        # Build the base prompt that each chunk will be appended to.
-        # (This is aligned with your existing structured response requirement.)
-        # ------------------------
-        base_prompt = f"""
-You are an advanced garment production chatbot. Be professional, concise and industry-specific.
+        def compress_summary_text(s: str) -> str:
+            # simple compression: shorten keys and drop samples
+            s = s.replace("records=", "r=").replace("avg_eff=", "aEff=").replace("min_eff=", "mEff=").replace("max_eff=", "MEff=").replace("total_prod=", "totP=").replace("top_lines=", "topL=")
+            if "samples:" in s:
+                s = s.split("samples:")[0]
+            if " | samples" in s:
+                s = s.split(" | samples")[0]
+            return s
+
+        def summarize_chunk(chunk: pd.DataFrame, idx: int) -> str:
+            try:
+                n = len(chunk)
+                parts = [f"Chunk{idx}: r={n}"]
+                if "EffPer" in chunk.columns:
+                    parts.append(f"aEff={chunk['EffPer'].mean():.1f}")
+                    parts.append(f"mEff={chunk['EffPer'].min():.1f}")
+                    parts.append(f"MEff={chunk['EffPer'].max():.1f}")
+                if "ProdnPcs" in chunk.columns:
+                    parts.append(f"totP={int(chunk['ProdnPcs'].sum())}")
+                # top lines by avg EffPer
+                if "LineName" in chunk.columns and "EffPer" in chunk.columns:
+                    top = chunk.groupby("LineName")["EffPer"].mean().sort_values(ascending=False).head(3)
+                    parts.append("topL=" + ", ".join([f"{ln}:{val:.1f}" for ln, val in top.items()]))
+                # small sample (1 row) to keep some context
+                sample = ""
+                try:
+                    sample_row = chunk.head(1).to_dict(orient="records")
+                    if sample_row:
+                        r = sample_row[0]
+                        sample = " | s=" + ", ".join([f"{k}={r[k]}" for k in r.keys() if k in ["LineName","StyleNo","PartName"] and r[k] is not None])
+                except Exception:
+                    sample = ""
+                summary = "; ".join(parts) + sample
+                return compress_summary_text(summary)
+            except Exception as e:
+                logger.debug(f"chunk summarization failed: {e}")
+                return f"Chunk{idx}: r={len(chunk)}"
+
+        for i in range(0, len(df_small), SECTION_SIZE):
+            chunk = df_small.iloc[i:i + SECTION_SIZE]
+            chunk_summaries.append(summarize_chunk(chunk, idx=(i // SECTION_SIZE) + 1))
+
+        logger.info(f"✅ Created {len(chunk_summaries)} chunk summaries (section_size={SECTION_SIZE})")
+
+        # If too many summaries, aggregate globally instead of listing all
+        MAX_SUMMARIES_TO_INCLUDE = 12
+        if len(chunk_summaries) > MAX_SUMMARIES_TO_INCLUDE:
+            global_parts = []
+            if "EffPer" in df_small.columns:
+                global_parts.append(f"global_aEff={df_small['EffPer'].mean():.1f}")
+                global_parts.append(f"global_mEff={df_small['EffPer'].min():.1f}")
+                global_parts.append(f"global_MEff={df_small['EffPer'].max():.1f}")
+            if "ProdnPcs" in df_small.columns:
+                global_parts.append(f"global_totP={int(df_small['ProdnPcs'].sum())}")
+            if "LineName" in df_small.columns and "EffPer" in df_small.columns:
+                top_lines = df_small.groupby("LineName")["EffPer"].mean().sort_values(ascending=False).head(5)
+                global_parts.append("top_lines_overall=" + ", ".join([f"{ln}:{val:.1f}" for ln, val in top_lines.items()]))
+            aggregated = "AGGREGATED_SUMMARY: " + "; ".join(global_parts)
+            summaries_for_model = [aggregated]
+            logger.warning("Too many summaries -> using aggregated summary for final prompt (keeps prompt small)")
+        else:
+            summaries_for_model = chunk_summaries
+
+        # -------------------------
+        # 3) Build final prompt (concise)
+        # -------------------------
+        base_prompt = f"""You are an expert garment production analytics assistant.
 User query: {query}
 
-Respond with this structure:
+You MUST answer using only the provided production summaries.
+Respond structured as:
 1) Analytical Findings
-2) Diagnostic Analysis
+2) Diagnostic Analysis (root causes)
 3) Predictive Forecast
 4) Strategic Recommendations
 5) Comparative Benchmarks
 
-Only use the provided production data below to inform your conclusions and recommendations.
-Be explicit about assumptions and cite lines/examples when useful.
+Be professional, concise, and cite example summary lines or aggregated stats when useful.
 """
 
-        # ------------------------
-        # Prepare Ollama client and ensure the model is available
-        # ------------------------
-        client = OllamaClient(model="llama3.2:3b")
-        ok = await client.ensure_model_pulled()
-        if not ok:
-            logger.warning("Ollama model not available or failed to pull; continuing but expect errors")
+        prompt_parts = [base_prompt, "\nPRODUCTION_SUMMARIES:"]
+        for s in summaries_for_model:
+            prompt_parts.append(f"- {s}")
+        final_prompt = "\n".join(prompt_parts)
 
-        # We'll stream tokens out in JSON; also accumulate full AI text for export if requested
-        ai_full_response = ""
+        # Safe prompt size checks (conservative)
+        MAX_PROMPT_CHARS = 32000
+        APPROX_TOKEN_LIMIT = 3800  # approx tokens to keep below 4096
+        approx_tokens = int(len(final_prompt) / 4)
+        logger.info(f"[PROMPT SIZE] chars={len(final_prompt)} approx_tokens={approx_tokens} summaries_included={len(summaries_for_model)}")
 
+        if approx_tokens > APPROX_TOKEN_LIMIT or len(final_prompt) > MAX_PROMPT_CHARS:
+            # aggressively trim summaries if still too large
+            keep_n = min(len(summaries_for_model), MAX_SUMMARIES_TO_INCLUDE)
+            final_prompt = base_prompt + "\nPRODUCTION_SUMMARIES:\n" + "\n".join([f"- {s}" for s in summaries_for_model[:keep_n]])
+            logger.warning("Final prompt exceeded safe budget -> truncated summaries included")
+            approx_tokens = int(len(final_prompt) / 4)
+
+        # -------------------------
+        # 4) Streaming helper(s) to call Ollama
+        # -------------------------
+        OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+
+        async def _stream_from_ollama_http(prompt_text: str, model: str = "llama3.2:3b", max_tokens: int = 1000, temperature: float = 0.25):
+            """
+            Stream from Ollama HTTP /api/generate (streaming)
+            Yields raw string fragments to be appended to answer.
+            """
+            endpoint = f"{OLLAMA_URL}/api/generate"
+            payload = {
+                "model": model,
+                "prompt": prompt_text,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "stream": True
+            }
+            headers = {"Content-Type": "application/json"}
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                async with client.stream("POST", endpoint, json=payload, headers=headers) as resp:
+                    resp.raise_for_status()
+                    # Ollama often returns newline-delimited JSON or text. iterate lines.
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        line = line.strip()
+                        # try parse JSON
+                        try:
+                            j = json.loads(line)
+                            # attempt to extract text content from several common shapes
+                            # 1) {"choices":[{"delta":{"content":"..."}},...]}
+                            if isinstance(j, dict):
+                                # common keys: 'choices', 'message', 'response', 'content', 'text'
+                                text_candidate = None
+                                # openai style
+                                if "choices" in j and isinstance(j["choices"], list):
+                                    for ch in j["choices"]:
+                                        delta = ch.get("delta") or ch.get("message")
+                                        if isinstance(delta, dict):
+                                            # nested content fields
+                                            text_candidate = delta.get("content") or delta.get("text") or delta.get("message") or text_candidate
+                                # other shapes
+                                if text_candidate is None:
+                                    text_candidate = j.get("response") or j.get("message") or j.get("text") or j.get("content")
+                                if text_candidate is not None:
+                                    yield str(text_candidate)
+                                    continue
+                        except Exception:
+                            # not parsable as JSON; send raw line content
+                            pass
+                        yield line
+
+        # Try to use a local ollama_client module (if exists and has streaming)
+        local_ollama = None
+        try:
+            import ollama_client as oc
+            local_ollama = oc
+        except Exception:
+            local_ollama = None
+
+        async def _stream_from_local_client_if_possible(prompt_text: str, model: str = "llama3.2:3b", max_tokens: int = 1000, temperature: float = 0.25):
+            """
+            Try a variety of possible streaming methods on local ollama_client.
+            If not available or raises, this function will raise to let caller fallback to HTTP.
+            """
+            if not local_ollama:
+                raise AttributeError("local ollama_client not present")
+            # candidate method names
+            candidates = ["stream_chat", "stream", "generate", "stream_generate", "stream_chat_completion", "stream_response"]
+            for name in candidates:
+                if hasattr(local_ollama, name):
+                    method = getattr(local_ollama, name)
+                    # we try to call with several common signatures; assume async generator
+                    try:
+                        # try signature: method(prompt=..., stream=True, max_tokens=...)
+                        async for frag in method(prompt=prompt_text, stream=True, max_tokens=max_tokens, temperature=temperature):
+                            yield str(frag)
+                        return
+                    except TypeError:
+                        # try other signatures
+                        try:
+                            async for frag in method(prompt_text, stream=True):
+                                yield str(frag)
+                            return
+                        except Exception:
+                            continue
+                    except Exception as e:
+                        # method exists but failed; try next
+                        logger.debug(f"local ollama method {name} failed: {e}")
+                        continue
+            # no candidate worked
+            raise AttributeError("local ollama_client had no usable streaming method")
+
+        # -------------------------
+        # 5) StreamingResponse generator (streams JSON with answer field token-by-token)
+        # -------------------------
         async def response_stream():
             try:
-                # start JSON answer field (we stream the answer value as an escaped string)
+                # Start JSON object and open answer string
                 yield '{"status":"success","answer":"'
 
-                # For each data chunk call the model and stream its generated tokens
-                for idx, section in enumerate(context_sections, start=1):
-                    enriched_prompt = base_prompt + f"\n\nProduction Data (chunk {idx}/{len(context_sections)}):\n" + section
+                used_method = "none"
+                # First try local client streaming (if present)
+                try:
+                    async for frag in _stream_from_local_client_if_possible(final_prompt, max_tokens=1000, temperature=0.25):
+                        used_method = "local_ollama"
+                        frag_text = frag or ""
+                        frag_escaped = frag_text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+                        yield frag_escaped
+                except Exception as e_local:
+                    logger.debug(f"local streaming not available or failed: {e_local}")
+                    # fall back to HTTP streaming
+                    async for frag in _stream_from_ollama_http(final_prompt, max_tokens=1000, temperature=0.25):
+                        used_method = "http_ollama"
+                        frag_text = frag or ""
+                        frag_escaped = frag_text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+                        yield frag_escaped
 
-                    # Build AIRequest with streaming enabled; safe num_predict below model max
-                    ai_req = AIRequest(
-                        prompt=enriched_prompt,
-                        max_tokens=1200,         # safe token budget per chunk (tweak if needed)
-                        temperature=0.25,
-                        stream=True
-                    )
+                # Close answer field and add metadata
+                yield '","records_analyzed":' + str(len(df_small))
 
-                    # stream from Ollama (generate_completion yields str fragments)
-                    async for fragment in client.generate_completion(ai_req):
-                        if not isinstance(fragment, str):
-                            fragment = str(fragment)
-                        # accumulate
-                        ai_full_response += fragment
-                        # escape JSON characters and newlines for safe streaming JSON
-                        out = fragment.replace('\\', '\\\\').replace('"', '\\"').replace("\n", "\\n")
-                        yield out
-
-                # close the answer string
-                yield '","records_analyzed":' + str(len(df))
-
-                # filters used
                 filters = {
                     "unit_code": unit_code,
                     "floor_name": floor_name,
@@ -1572,50 +1741,70 @@ Be explicit about assumptions and cite lines/examples when useful.
                 }
                 yield ',"filters":' + json.dumps(filters)
 
-                # export handling (we generate the file now and expose the path)
+                # Exports: create CSV or PDF in temp and include path in metadata
                 export_path = None
                 try:
                     if export == "csv":
-                        ts = time.strftime("%Y%m%d_%H%M%S")
-                        fd, csv_path = tempfile.mkstemp(prefix=f"chatbot_export_{ts}_", suffix=".csv")
+                        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        fd, csv_path = tempfile.mkstemp(prefix=f"ultra_chatbot_{ts}_", suffix=".csv")
                         os.close(fd)
                         df.to_csv(csv_path, index=False)
                         export_path = csv_path
-                    elif export == "pdf" and make_ultra_advanced_pdf_report:
-                        ts = time.strftime("%Y%m%d_%H%M%S")
-                        pdf_path = Path(tempfile.gettempdir()) / f"chatbot_report_{ts}.pdf"
-                        # Use your compatibility PDF helper
-                        make_ultra_advanced_pdf_report(df, str(pdf_path), "Ultra-Advanced Chatbot Report", ai_full_response)
-                        export_path = str(pdf_path)
-                except Exception as e:
-                    logger.error(f"Export generation failed: {e}", exc_info=True)
+                    elif export == "pdf":
+                        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        pdf_path = os.path.join(tempfile.gettempdir(), f"ultra_chatbot_{ts}.pdf")
+                        if make_pdf_helper:
+                            try:
+                                make_pdf_helper(df, pdf_path, "Ultra Chatbot Report", "\n".join(summaries_for_model))
+                                export_path = pdf_path
+                            except Exception as e:
+                                logger.warning(f"make_pdf_helper failed: {e}; will attempt simple PDF generation")
+                        if export_path is None:
+                            # fallback simple PDF generator
+                            try:
+                                c = canvas.Canvas(pdf_path, pagesize=(595, 842))  # A4 approx
+                                c.setFont("Helvetica-Bold", 14)
+                                c.drawString(40, 800, "Ultra Chatbot - Production Summaries")
+                                c.setFont("Helvetica", 10)
+                                y = 780
+                                for s in summaries_for_model:
+                                    if y < 60:
+                                        c.showPage()
+                                        y = 800
+                                    c.drawString(40, y, (s[:120]))
+                                    y -= 14
+                                c.save()
+                                export_path = pdf_path
+                            except Exception as e:
+                                logger.error(f"PDF fallback generation failed: {e}")
+                                export_path = None
+                except Exception as e_export:
+                    logger.error(f"Export generation error: {e_export}", exc_info=True)
                     export_path = None
 
-                # metadata
                 processing_time = round(time.time() - start_time, 2)
                 meta = {
                     "processing_time": processing_time,
-                    "columns_detected": list(df.columns),
-                    "chunks": len(context_sections),
-                    "export_file": export_path
+                    "columns_detected": list(df_small.columns),
+                    "chunks": math.ceil(len(df_small) / SECTION_SIZE),
+                    "export_file": export_path,
+                    "ollama_mode": used_method
                 }
                 yield ',"metadata":' + json.dumps(meta)
 
-                # final close
+                # End JSON
                 yield "}"
-            except Exception as stream_exc:
-                logger.error("Streaming error in ultra_chatbot: %s", stream_exc, exc_info=True)
-                # return a minimal error JSON chunk
-                yield '{"status":"error","answer":"Chatbot streaming failed"}'
+            except Exception as e_stream:
+                logger.error(f"Streaming generator error: {e_stream}", exc_info=True)
+                # Send minimal error JSON for client to parse
+                yield '{"status":"error","answer":"Chatbot streaming failed due to internal error."}'
 
-        # Return the streaming response (application/json)
+        # Return streaming response (frontend can animate the "answer" string)
         return StreamingResponse(response_stream(), media_type="application/json")
 
     except Exception as e:
         logger.error(f"ultra_chatbot endpoint error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Chatbot Error: {str(e)}")
-
-
 
 
 # Enhanced version of your existing chatbot with backward compatibility
