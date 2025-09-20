@@ -7,6 +7,8 @@ import asyncio
 import json
 import logging
 import subprocess
+
+import aiohttp
 import httpx
 from typing import Dict, List, Any, Optional, AsyncGenerator
 from dataclasses import dataclass
@@ -216,6 +218,33 @@ Respond only with valid JSON array:
             return [
                 OperationSuggestion(id="fallback-1", label="General Operation", confidence=0.5)
             ]
+    async def stream_chat(self, model: str, messages: list, options: dict = None):
+        """
+        Stream chat responses from Ollama (token-by-token).
+        Yields tokens like ChatGPT typing animation.
+        """
+        url = f"{self.base_url}/api/chat"
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": True  # important for streaming
+        }
+        if options:
+            payload["options"] = options
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload) as resp:
+                async for line in resp.content:
+                    if not line.strip():
+                        continue
+                    try:
+                        data = json.loads(line.decode("utf-8"))
+                        if "message" in data and "content" in data["message"]:
+                            yield data["message"]["content"]
+                    except Exception as e:
+                        logger.error(f"Streaming parse error: {e}")
+                        continue
+
 
 # Global client instance
 ollama_client = OllamaClient()

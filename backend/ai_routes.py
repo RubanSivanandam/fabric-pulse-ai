@@ -1,7 +1,8 @@
 """
-   AI API Routes for Fabric Pulse AI
-   Local Ollama integration with rate limiting
-   """
+AI API Routes for Fabric Pulse AI
+Enhanced with Professional Reporting Integration
+Combines original functionality with new reporting endpoints
+"""
 
 import asyncio
 import logging
@@ -14,9 +15,11 @@ import pyodbc
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-import httpx
 from config import config
 from ollama_client import ollama_client, SummarizeRequest, OperationSuggestion, AIRequest
+
+# Import the WhatsApp service instance
+from whatsapp_service import whatsapp_service
 
 logger = logging.getLogger(__name__)
 
@@ -143,33 +146,74 @@ def get_router():
         request: SummarizeRequestModel,
         rate_limited: bool = Depends(rate_limit_check)
     ):
-        """Summarize text using local Ollama model"""
+        """Summarize text with optional flagged employee data using local Ollama model"""
         start_time = time.time()
         
         try:
+            # Fetch flagged employees for context
+            flagged_employees = await whatsapp_service.fetch_flagged_employees()
+            
+            # Create context text from flagged employees
+            if flagged_employees:
+                context_lines = [f"Flagged Employee Analysis for {datetime.now().strftime('%Y-%m-%d %H:%M')}:"]
+                
+                # Group by line for better organization
+                line_groups = {}
+                for emp in flagged_employees:
+                    line_key = f"{emp.unit_code}_{emp.line_name}"
+                    if line_key not in line_groups:
+                        line_groups[line_key] = []
+                    line_groups[line_key].append(emp)
+                
+                for line_key, employees in line_groups.items():
+                    line_name = employees[0].line_name
+                    unit_code = employees[0].unit_code
+                    context_lines.append(f"\\nLine: {line_name} (Unit: {unit_code})")
+                    
+                    for emp in employees:
+                        context_lines.append(
+                            f"- {emp.emp_name} ({emp.emp_code}): {emp.efficiency_per:.1f}% efficiency, "
+                            f"Production: {emp.production_pcs}/{emp.eff100}, "
+                            f"Operation: {emp.new_oper_seq}, Style: {emp.style_no}"
+                        )
+                
+                context_text = "\\n".join(context_lines)
+            else:
+                context_text = "No flagged employees found for today - all production lines performing above target."
+            
+            # Combine with user-provided text
+            if request.text:
+                full_text = f"{context_text}\\n\\nAdditional Context: {request.text}"
+            else:
+                full_text = context_text
+            
             # Ensure model is available
             if not await ollama_client.ensure_model_pulled():
-                raise HTTPException(
-                    status_code=503,
-                    detail="AI model not available. Please ensure Ollama is running."
+                # Provide fallback summary
+                fallback_summary = f"Found {len(flagged_employees)} employees below efficiency targets across {len(set(emp.line_name for emp in flagged_employees))} production lines. Focus areas include efficiency improvement and operational support."
+                processing_time = time.time() - start_time
+                
+                return SummarizeResponse(
+                    summary=fallback_summary,
+                    original_length=len(full_text),
+                    processing_time=processing_time
                 )
             
             # Create summarize request
             summarize_req = SummarizeRequest(
-                text=request.text,
+                text=full_text,
                 length=request.length
             )
             
-            # Generate summary
+            # Generate AI summary
             summary = await ollama_client.summarize_text(summarize_req)
-            
             processing_time = time.time() - start_time
             
-            logger.info(f"Summarization completed in {processing_time:.2f}s")
+            logger.info(f"Flagged employee summarization completed in {processing_time:.2f}s")
             
             return SummarizeResponse(
                 summary=summary,
-                original_length=len(request.text),
+                original_length=len(full_text),
                 processing_time=processing_time
             )
             
@@ -177,23 +221,70 @@ def get_router():
             logger.error(f"Summarization failed: {e}")
             raise HTTPException(status_code=500, detail=f"Summarization failed: {str(e)}")
 
-    @router.post("/suggest_ops", response_model=SummarizeResponse)
+    @router.post("/suggest_ops", response_model=SuggestOperationsResponse)
     async def suggest_operations(
         request: SuggestOperationsRequest,
         rate_limited: bool = Depends(rate_limit_check)
     ):
-        """Suggest operations based on context and query"""
+        """Suggest operations with flagged employee context"""
         start_time = time.time()
         
         try:
+            # Fetch flagged employees for context
+            flagged_employees = await whatsapp_service.fetch_flagged_employees()
+            
+            # Create enhanced context
+            flagged_context = f"Current flagged employees context: {len(flagged_employees)} employees below target. "
+            
+            if flagged_employees:
+                operations = set()
+                lines = set()
+                avg_efficiency = sum(emp.efficiency_per for emp in flagged_employees) / len(flagged_employees)
+                
+                for emp in flagged_employees:
+                    operations.add(emp.new_oper_seq)
+                    lines.add(emp.line_name)
+                
+                flagged_context += f"Problem operations: {', '.join(operations)}. "
+                flagged_context += f"Affected lines: {', '.join(lines)}. "
+                flagged_context += f"Average efficiency: {avg_efficiency:.1f}%. "
+            
+            enhanced_context = f"{flagged_context} {request.context}"
+            
             if not await ollama_client.ensure_model_pulled():
-                raise HTTPException(
-                    status_code=503,
-                    detail="AI model not available. Please ensure Ollama is running."
+                # Fallback suggestions
+                fallback_suggestions = [
+                    OperationSuggestionModel(
+                        id="training-support",
+                        label="Provide Additional Training Support",
+                        confidence=0.9
+                    ),
+                    OperationSuggestionModel(
+                        id="equipment-check",
+                        label="Check Equipment and Tools",
+                        confidence=0.8
+                    ),
+                    OperationSuggestionModel(
+                        id="workflow-optimization",
+                        label="Optimize Workflow Process",
+                        confidence=0.7
+                    ),
+                    OperationSuggestionModel(
+                        id="quality-coaching",
+                        label="Provide Quality and Speed Coaching",
+                        confidence=0.8
+                    )
+                ]
+                
+                processing_time = time.time() - start_time
+                return SuggestOperationsResponse(
+                    suggestions=fallback_suggestions,
+                    processing_time=processing_time
                 )
             
+            # Generate AI-powered suggestions
             suggestions = await ollama_client.suggest_operations(
-                context=request.context,
+                context=enhanced_context,
                 query=request.query
             )
             
@@ -207,7 +298,7 @@ def get_router():
                 ) for s in suggestions
             ]
             
-            logger.info(f"Operation suggestions completed in {processing_time:.2f}s")
+            logger.info(f"Enhanced operation suggestions completed in {processing_time:.2f}s")
             
             return SuggestOperationsResponse(
                 suggestions=suggestion_models,
@@ -275,13 +366,13 @@ def get_router():
             
             query = """
             SELECT 
-                COUNT(DISTINCT employee_code) as total_operators,
-                AVG(efficiency) as avg_efficiency,
-                SUM(production) as total_production,
-                SUM(CASE WHEN production >= target_production THEN 1 ELSE 0 END) as lines_on_target,
-                COUNT(CASE WHEN efficiency < ? THEN 1 END) as alerts_generated
+                COUNT(DISTINCT EmpCode) as total_operators,
+                AVG(EffPer) as avg_efficiency,
+                SUM(ProdnPcs) as total_production,
+                SUM(CASE WHEN ProdnPcs >= Eff100 THEN 1 ELSE 0 END) as lines_on_target,
+                COUNT(CASE WHEN EffPer < ? THEN 1 END) as alerts_generated
             FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
-            WHERE production_date = CAST(GETDATE() AS DATE)
+            WHERE CAST(TranDate AS DATE) = CAST(GETDATE() AS DATE)
             """
             
             cursor.execute(query, (config.alerts.critical_threshold,))
@@ -314,19 +405,19 @@ def get_router():
             
             query = """
             SELECT 
-                pr.employee_code,
-                e.employee_name,
-                pr.efficiency,
-                pr.production,
-                pr.target_production,
-                pr.unit_code,
-                pr.line_name,
-                pr.operation,
-                pr.new_oper_seq,
-                pr.floor_name
+                pr.EmpCode,
+                e.EmpName,
+                pr.EffPer,
+                pr.ProdnPcs,
+                pr.Eff100,
+                pr.UnitCode,
+                pr.LineName,
+                pr.Operation,
+                pr.NewOperSeq,
+                pr.FloorName
             FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction] pr
-            LEFT JOIN [ITR_PRO_IND].[dbo].[Employees] e ON pr.employee_code = e.employee_code
-            WHERE pr.TranDate = CAST(GETDATE() AS DATE)
+            LEFT JOIN [ITR_PRO_IND].[dbo].[Employees] e ON pr.EmpCode = e.EmpCode
+            WHERE CAST(pr.TranDate AS DATE) = CAST(GETDATE() AS DATE)
             """
             
             cursor.execute(query)
@@ -334,16 +425,16 @@ def get_router():
             
             response = [
                 OperatorData(
-                    employee_code=row[0],
-                    employee_name=row[1],
-                    efficiency=float(row[2]) if row[2] else 0.0,
-                    production=row[3] if row[3] else 0,
-                    target_production=row[4] if row[4] else 0,
-                    unit_code=row[5] if row[5] else '',
-                    line_name=row[6] if row[6] else '',
-                    operation=row[7] if row[7] else '',
-                    new_oper_seq=row[8] if row[8] else 'UNKNOWN',
-                    floor_name=row[9] if row[9] else 'FLOOR-UNKNOWN'
+                    employee_code=row[0] or '',
+                    employee_name=row[1] or 'UNKNOWN',
+                    efficiency=float(row[2]) if row[2] is not None else 0.0,
+                    production=int(row[3]) if row[3] is not None else 0,
+                    target_production=int(row[4]) if row[4] is not None else 0,
+                    unit_code=row[5] or '',
+                    line_name=row[6] or '',
+                    operation=row[7] or '',
+                    new_oper_seq=row[8] or 'UNKNOWN',
+                    floor_name=row[9] or 'FLOOR-UNKNOWN'
                 ) for row in rows
             ]
             
@@ -366,15 +457,15 @@ def get_router():
             
             query = """
             SELECT 
-                line_name,
-                unit_code,
-                SUM(production) as total_production,
-                SUM(target_production) as target_production,
-                AVG(efficiency) as avg_efficiency,
-                COUNT(DISTINCT employee_code) as operator_count
-                FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
-                WHERE TranDate = CAST(GETDATE() AS DATE)
-                GROUP BY line_name, unit_code
+                LineName,
+                UnitCode,
+                SUM(ProdnPcs) as total_production,
+                SUM(Eff100) as target_production,
+                AVG(EffPer) as avg_efficiency,
+                COUNT(DISTINCT EmpCode) as operator_count
+            FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
+            WHERE CAST(TranDate AS DATE) = CAST(GETDATE() AS DATE)
+            GROUP BY LineName, UnitCode
             """
             
             cursor.execute(query)
@@ -382,12 +473,12 @@ def get_router():
             
             response = [
                 LineData(
-                    line_name=row[0] if row[0] else '',
-                    unit_code=row[1] if row[1] else '',
-                    total_production=row[2] if row[2] else 0,
-                    target_production=row[3] if row[3] else 0,
-                    avg_efficiency=float(row[4]) if row[4] else 0.0,
-                    operator_count=row[5] if row[5] else 0
+                    line_name=row[0] or '',
+                    unit_code=row[1] or '',
+                    total_production=int(row[2]) if row[2] is not None else 0,
+                    target_production=int(row[3]) if row[3] is not None else 0,
+                    avg_efficiency=float(row[4]) if row[4] is not None else 0.0,
+                    operator_count=int(row[5]) if row[5] is not None else 0
                 ) for row in rows
             ]
             
@@ -401,6 +492,242 @@ def get_router():
             logger.error(f"Failed to fetch line data: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to fetch line data: {str(e)}")
 
+    @router.post("/api/ai/predict_efficiency")
+    async def predict_production_efficiency(
+        rate_limited: bool = Depends(rate_limit_check)
+    ):
+        """
+        Predict production efficiencies grouped by line and style number
+        Uses the same data feed pattern as summarize API
+        """
+        start_time = time.time()
+        try:
+            # Fetch production data from database
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            query = """
+            SELECT 
+                LineName,
+                StyleNo,
+                UnitCode,
+                FloorName,
+                COUNT(DISTINCT EmpCode) as operator_count,
+                AVG(EffPer) as avg_efficiency,
+                SUM(ProdnPcs) as total_production,
+                SUM(Eff100) as total_target,
+                AVG(SAM) as avg_sam
+            FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
+            WHERE CAST(TranDate AS DATE) = CAST(GETDATE() AS DATE)
+                AND ProdnPcs > 0
+                AND LineName IS NOT NULL
+                AND StyleNo IS NOT NULL
+            GROUP BY LineName, StyleNo, UnitCode, FloorName
+            ORDER BY LineName, StyleNo
+            """
+            
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            
+            # Prepare data for prediction analysis
+            prediction_data = []
+            for row in rows:
+                line_data = {
+                    "line_name": row[0] or '',
+                    "style_no": row[1] or '',
+                    "unit_code": row[2] or '',
+                    "floor_name": row[3] or '',
+                    "operator_count": int(row[4]) if row[4] is not None else 0,
+                    "avg_efficiency": float(row[5]) if row[5] is not None else 0.0,
+                    "total_production": int(row[6]) if row[6] is not None else 0,
+                    "total_target": int(row[7]) if row[7] is not None else 0,
+                    "avg_sam": float(row[8]) if row[8] is not None else 0.0
+                }
+                line_data["efficiency_ratio"] = line_data["avg_efficiency"] / 100.0 if line_data["avg_efficiency"] > 0 else 0.0
+                line_data["production_ratio"] = (line_data["total_production"] / line_data["total_target"]) if line_data["total_target"] > 0 else 0.0
+                prediction_data.append(line_data)
+            
+            cursor.close()
+            conn.close()
+            
+            # Generate predictions with enhanced logic
+            predictions = []
+            for data in prediction_data:
+                base_efficiency = data['avg_efficiency']
+                
+                # Factor in production ratio and operator dynamics
+                production_factor = min(1.1, data['production_ratio'] + 0.1)
+                operator_factor = max(0.95, 1.0 - (data['operator_count'] * 0.002))
+                sam_factor = max(0.98, 1.0 - (data['avg_sam'] * 0.001)) if data['avg_sam'] > 0 else 1.0
+                
+                predicted_efficiency = min(100.0, base_efficiency * production_factor * operator_factor * sam_factor)
+                
+                trend = "stable"
+                if predicted_efficiency > base_efficiency + 2:
+                    trend = "improving"
+                elif predicted_efficiency < base_efficiency - 2:
+                    trend = "declining"
+                
+                predictions.append({
+                    **data,
+                    "predicted_efficiency": round(predicted_efficiency, 1),
+                    "efficiency_trend": trend,
+                    "confidence": 0.80,
+                    "improvement_potential": round(predicted_efficiency - base_efficiency, 1)
+                })
+            
+            processing_time = time.time() - start_time
+            
+            # Group predictions by line
+            grouped_predictions = {}
+            for pred in predictions:
+                line_name = pred['line_name']
+                if line_name not in grouped_predictions:
+                    grouped_predictions[line_name] = {
+                        "line_name": line_name,
+                        "unit_code": pred['unit_code'],
+                        "floor_name": pred['floor_name'],
+                        "styles": [],
+                        "line_summary": {
+                            "total_operators": 0,
+                            "avg_current_efficiency": 0,
+                            "avg_predicted_efficiency": 0,
+                            "total_production": 0
+                        }
+                    }
+                
+                grouped_predictions[line_name]['styles'].append({
+                    "style_no": pred['style_no'],
+                    "current_efficiency": pred['avg_efficiency'],
+                    "predicted_efficiency": pred['predicted_efficiency'],
+                    "efficiency_trend": pred['efficiency_trend'],
+                    "improvement_potential": pred['improvement_potential'],
+                    "operator_count": pred['operator_count'],
+                    "total_production": pred['total_production'],
+                    "confidence": pred['confidence']
+                })
+                
+                # Update line summary
+                summary = grouped_predictions[line_name]['line_summary']
+                summary['total_operators'] += pred['operator_count']
+                summary['total_production'] += pred['total_production']
+            
+            # Calculate line-level averages
+            for line_data in grouped_predictions.values():
+                styles = line_data['styles']
+                if styles:
+                    line_data['line_summary']['avg_current_efficiency'] = round(
+                        sum(s['current_efficiency'] for s in styles) / len(styles), 1
+                    )
+                    line_data['line_summary']['avg_predicted_efficiency'] = round(
+                        sum(s['predicted_efficiency'] for s in styles) / len(styles), 1
+                    )
+            
+            logger.info(f"Efficiency prediction completed in {processing_time:.2f}s for {len(predictions)} line-style combinations")
+            
+            return {
+                "status": "success",
+                "predictions_by_line": grouped_predictions,
+                "summary": {
+                    "total_lines": len(grouped_predictions),
+                    "total_style_combinations": len(predictions),
+                    "processing_time": processing_time,
+                    "prediction_date": datetime.now().isoformat()
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Production efficiency prediction failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+
+    @router.post("/generate_report")
+    async def generate_hourly_report(
+        test_mode: bool = False,
+        rate_limited: bool = Depends(rate_limit_check)
+    ):
+        """
+        Generate and send professional hourly production report to supervisors
+        Groups by LineName → StyleNo with branded PDF format
+        """
+        try:
+            result = await whatsapp_service.generate_and_send_reports(test_mode=test_mode)
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Report generation failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+
+    @router.get("/report_status")
+    async def get_report_status(rate_limited: bool = Depends(rate_limit_check)):
+        """Get status of the enhanced reporting system"""
+        return whatsapp_service.get_status()
+
+    @router.post("/start_scheduler")
+    async def start_report_scheduler(rate_limited: bool = Depends(rate_limit_check)):
+        """Start the hourly report scheduler - generates reports every hour at :00"""
+        try:
+            whatsapp_service.start_hourly_scheduler()
+            return {
+                "status": "success",
+                "message": "Hourly report scheduler started - reports will be generated every hour at :00 minutes",
+                "scheduler_running": True,
+                "test_numbers": whatsapp_service.test_numbers
+            }
+        except Exception as e:
+            logger.error(f"Failed to start scheduler: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to start scheduler: {str(e)}")
+
+    @router.post("/stop_scheduler")
+    async def stop_report_scheduler(rate_limited: bool = Depends(rate_limit_check)):
+        """Stop the hourly report scheduler"""
+        try:
+            whatsapp_service.stop_hourly_scheduler()
+            return {
+                "status": "success",
+                "message": "Hourly report scheduler stopped",
+                "scheduler_running": False
+            }
+        except Exception as e:
+            logger.error(f"Failed to stop scheduler: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to stop scheduler: {str(e)}")
+
+    @router.get("/fetch_flagged_employees")
+    async def fetch_flagged_employees_endpoint(rate_limited: bool = Depends(rate_limit_check)):
+        """Fetch current flagged employees for debugging/monitoring"""
+        try:
+            flagged_employees = await whatsapp_service.fetch_flagged_employees()
+            
+            # Convert to serializable format
+            employees_data = []
+            for emp in flagged_employees:
+                employees_data.append({
+                    "emp_name": emp.emp_name,
+                    "emp_code": emp.emp_code,
+                    "unit_code": emp.unit_code,
+                    "floor_name": emp.floor_name,
+                    "line_name": emp.line_name,
+                    "style_no": emp.style_no,
+                    "part_name": emp.part_name,
+                    "operation": emp.operation,
+                    "new_oper_seq": emp.new_oper_seq,
+                    "production_pcs": emp.production_pcs,
+                    "eff100": emp.eff100,
+                    "efficiency_per": emp.efficiency_per,
+                    "is_red_flag": emp.is_red_flag
+                })
+            
+            return {
+                "status": "success",
+                "flagged_employees": employees_data,
+                "total_count": len(employees_data),
+                "timestamp": datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to fetch flagged employees: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to fetch flagged employees: {str(e)}")
+
+    logger.info("✅ Enhanced AI routes with professional reporting loaded successfully")
     return router
 
 # Expose the router initialization function
