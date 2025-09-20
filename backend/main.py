@@ -15,6 +15,9 @@ import uvicorn
 from config import config
 from ai_routes import router as ai_router
 from fabric_pulse_ai_main import (
+    generate_hourly_report,
+    generate_pdf_report_api,
+    predict_efficiency,
     rtms_engine,
     ai_summarize,
     ai_suggest_operations,
@@ -27,6 +30,7 @@ from fabric_pulse_ai_main import (
     analyze_production_data,
     get_operator_efficiencies,
     health_check,
+    ultra_advanced_ai_chatbot,
 )
 
 # Setup logging
@@ -67,6 +71,7 @@ app.add_middleware(
 app.post("/api/ai/summarize")(ai_summarize)
 app.post("/api/ai/suggest_ops")(ai_suggest_operations)
 app.post("/api/ai/completion")(ai_completion)
+app.post("/api/ai/predict_efficiency")(predict_efficiency)
 app.get("/api/status")(get_service_status)
 app.get("/api/rtms/filters/units")(get_unit_codes)
 app.get("/api/rtms/filters/floors")(get_floor_names)
@@ -74,12 +79,16 @@ app.get("/api/rtms/filters/lines")(get_line_names)
 app.get("/api/rtms/filters/operations")(get_operations)
 app.get("/api/rtms/analyze")(analyze_production_data)
 app.get("/api/rtms/efficiency")(get_operator_efficiencies)
+app.get("/api/ai/generate_hourly_report")(generate_hourly_report)
+app.get("/api/reports/hourly_pdf")(generate_pdf_report_api)
 app.get("/health")(health_check)
 
 # 🔗 Aliases so frontend calls like /api/ai/rtms/... work too
 app.get("/api/ai/rtms/overview")(get_service_status)
 app.get("/api/ai/rtms/operators")(get_operator_efficiencies)
 app.get("/api/ai/rtms/lines")(get_line_names)
+app.post("/api/ai/predict_efficiency")(predict_efficiency)
+app.post("/api/ai/ultra_chatbot")(ultra_advanced_ai_chatbot)  # New chatbot endpoint
 
 if __name__ == "__main__":
     logger.info("🚀 Starting Unified Fabric Pulse AI Backend (with aliases)...")
