@@ -1108,8 +1108,7 @@ const FabricPulseDashboard = () => {
 
   // Render main UI
   return (
-    <div className="min-h-screen bg-background p-2 sm:p-4 lg:p-6 space-y-4 lg:space-y-6 overflow-x-hidden">
-    <div className="min-h-screen bg-background p-2 sm:p-4 lg:p-6 space-y-4 lg:space-y-6 overflow-x-hidden"> <RTMSBot /></div>
+   <div className="relative min-h-screen bg-background p-2 sm:p-4 lg:p-6 space-y-4 lg:space-y-6 overflow-x-hidden">
       {/* Header */}
       <motion.div
         ref={headerRef}
@@ -1477,6 +1476,7 @@ const FabricPulseDashboard = () => {
           </Card>
         </motion.div>
       </div>
+        <RTMSBot />
     </div>
   );
 };
