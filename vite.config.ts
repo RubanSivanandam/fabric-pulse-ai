@@ -9,10 +9,11 @@ import { defineConfig } from "vite";
          host: "::",
          port: 8080,
          proxy: {
-           "/api/ai/rtms": {
+          "/api": {
              target: "http://localhost:8000",
              changeOrigin: true,
-             rewrite: (path) => path.replace(/^\/api\/ai\/rtms/, '')
+            secure: false,
+            ws: true
            }
          }
        },

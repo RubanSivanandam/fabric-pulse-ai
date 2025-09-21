@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { useGLTF, Float, Environment, Html } from '@react-three/drei';
+import { Float, Environment, Html } from '@react-three/drei';
 import { gsap } from 'gsap';
 import { Suspense } from 'react';
 import { Button } from '@/components/ui/button';
@@ -73,42 +73,9 @@ const Robot3D = React.memo(() => {
   );
 });
 
-// Enhanced 3D Bot with GLB fallback
+// Enhanced 3D Bot Component
 const EnhancedRobot3D = () => {
-  const [useGLB, setUseGLB] = useState(true);
-  
-  // Try to load GLB model, fallback to basic robot
-  const RobotModel = () => {
-    try {
-      if (useGLB) {
-        const { scene } = useGLTF('/models/winged+robot+3d+model.glb');
-        const meshRef = useRef(null);
-        
-        useFrame((state) => {
-          if (meshRef.current) {
-            meshRef.current.position.y = Math.sin(state.clock.elapsedTime * 1.2) * 0.1;
-            meshRef.current.rotation.y = Math.sin(state.clock.elapsedTime * 0.5) * 0.05;
-          }
-        });
-        
-        return (
-          <primitive 
-            ref={meshRef}
-            object={scene} 
-            scale={[0.8, 0.8, 0.8]} 
-            position={[0, -0.5, 0]} 
-          />
-        );
-      }
-    } catch (error) {
-      console.warn('GLB model failed to load, using fallback robot');
-      setUseGLB(false);
-    }
-    
-    return <Robot3D />;
-  };
-  
-  return <RobotModel />;
+  return <Robot3D />;
 };
 
 // Floating 3D Bot Icon Component
@@ -315,8 +282,6 @@ const MessageBubble = ({ message, onDownload }) => {
               variant="outline"
               onClick={() => onDownload(message.exportFile)}
               className="w-full"
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
             >
               <Download className="w-4 h-4 mr-2" />
               Download Report
@@ -376,8 +341,6 @@ const SuggestionChips = ({ suggestions, onSelect, className }) => {
             size="sm"
             className="h-auto py-2 px-3 text-xs hover:bg-primary/10 border-primary/20"
             onClick={() => onSelect(suggestion)}
-            whileHover={{ scale: 1.05, boxShadow: "0 4px 12px rgba(59, 130, 246, 0.2)" }}
-            whileTap={{ scale: 0.95 }}
           >
             <span className="mr-2">{suggestion.icon}</span>
             {suggestion.text}
@@ -474,79 +437,29 @@ const RTMSBot = () => {
   }, [isOpen]);
 
   // API Integration Functions
-  const callAIAPI = async (query, endpoint = '/api/ai/ultra_chatbot') => {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ query, tab: currentTab }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`API call failed: ${response.statusText}`);
-    }
-
-    return response.json();
-  };
-
-  // Streaming API call
-  const callStreamingAPI = async (query) => {
-    const response = await fetch('/api/ai/ultra_chatbot', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ query, tab: currentTab, stream: true }),
-    });
-
-    if (!response.ok || !response.body) {
-      throw new Error('Streaming API call failed');
-    }
-
-    return response.body;
-  };
-
-  // Handle streaming response
-  const processStreamingResponse = async (stream, messageId) => {
-    const reader = stream.getReader();
-    const decoder = new TextDecoder();
-    let fullText = '';
-
+  const callAIAPI = async (query, endpoint = 'http://localhost:8000/api/ai/ultra_chatbot') => {
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        
-        if (done) break;
-        
-        const chunk = decoder.decode(value, { stream: true });
-        fullText += chunk;
-        
-        // Update message with accumulated text
-        setMessages(prev => prev.map(msg => 
-          msg.id === messageId 
-            ? { ...msg, content: fullText, isStreaming: true }
-            : msg
-        ));
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 
+          query, 
+          context_type: currentTab,
+          reasoning_mode: 'deep',
+          export_format: null
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`API call failed: ${response.statusText}`);
       }
-      
-      // Mark streaming as complete
-      setMessages(prev => prev.map(msg => 
-        msg.id === messageId 
-          ? { ...msg, isStreaming: false }
-          : msg
-      ));
-      
+
+      return await response.json();
     } catch (error) {
-      console.error('Streaming error:', error);
-      setMessages(prev => prev.map(msg => 
-        msg.id === messageId 
-          ? { ...msg, content: '⚠️ Sorry, something went wrong.', error: true, isStreaming: false }
-          : msg
-      ));
-    } finally {
-      setIsStreaming(false);
-      setIsLoading(false);
+      console.error('API call failed:', error);
+      throw error;
     }
   };
 
@@ -576,36 +489,73 @@ const RTMSBot = () => {
     setIsStreaming(true);
 
     try {
-      // Try streaming first
-      try {
-        const stream = await callStreamingAPI(content);
-        await processStreamingResponse(stream, messageId + '_bot');
-        return;
-      } catch (streamError) {
-        console.warn('Streaming failed, falling back to regular API:', streamError);
-      }
-
-      // Fallback to regular API call
+      // Call the backend API
       const response = await callAIAPI(content);
       
+      // Simulate streaming effect for better UX
+      const fullResponse = response.answer || 'I apologize, but I encountered an issue processing your request. Please try again.';
+      
+      // Stream the response character by character
+      let currentText = '';
+      for (let i = 0; i < fullResponse.length; i++) {
+        currentText += fullResponse[i];
+        
+        setMessages(prev => prev.map(msg => 
+          msg.id === messageId + '_bot'
+            ? { 
+                ...msg, 
+                content: currentText, 
+                isStreaming: i < fullResponse.length - 1
+              }
+            : msg
+        ));
+        
+        // Add small delay for streaming effect
+        if (i % 3 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+      }
+
+      // Mark as complete
       setMessages(prev => prev.map(msg => 
         msg.id === messageId + '_bot'
           ? { 
               ...msg, 
-              content: response.answer, 
+              content: fullResponse,
               isStreaming: false,
-              exportFile: response.export_file 
+              exportFile: response.export_data 
             }
           : msg
       ));
 
     } catch (error) {
       console.error('API Error:', error);
+      
+      // Provide helpful fallback response
+      const fallbackResponse = `I'm having trouble connecting to the production monitoring system right now. Here are some things you can try:
+
+📊 **Production Analysis Options:**
+• Check the main dashboard for real-time production data
+• Review efficiency metrics in the hierarchical monitor
+• Look for any system alerts or notifications
+
+🔧 **Troubleshooting:**
+• Ensure the backend service is running on port 8000
+• Check your network connection
+• Try refreshing the page
+
+💡 **Alternative Actions:**
+• Use the main dashboard to view current production status
+• Check the documentation section for system information
+• Contact your system administrator if issues persist
+
+I'll be ready to help once the connection is restored!`;
+
       setMessages(prev => prev.map(msg => 
         msg.id === messageId + '_bot'
           ? { 
               ...msg, 
-              content: '⚠️ Sorry, something went wrong.', 
+              content: fallbackResponse,
               error: true,
               isStreaming: false 
             }
@@ -626,7 +576,7 @@ const RTMSBot = () => {
   // Handle download
   const handleDownload = useCallback(async (filename) => {
     try {
-      const response = await fetch(`/api/downloads/${filename}`);
+      const response = await fetch(`http://localhost:8000/api/downloads/${filename}`);
       if (response.ok) {
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
@@ -701,18 +651,6 @@ const RTMSBot = () => {
                     size="sm"
                     onClick={handleClose}
                     className="hover:bg-destructive/10 hover:text-destructive"
-                    onMouseEnter={(e) => {
-                      gsap.to(e.currentTarget, { 
-                        rotation: 90, 
-                        duration: 0.2 
-                      });
-                    }}
-                    onMouseLeave={(e) => {
-                      gsap.to(e.currentTarget, { 
-                        rotation: 0, 
-                        duration: 0.2 
-                      });
-                    }}
                   >
                     <X className="w-4 h-4" />
                   </Button>
@@ -794,8 +732,6 @@ const RTMSBot = () => {
                       type="submit" 
                       size="sm"
                       disabled={!inputValue.trim() || isLoading}
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
                     >
                       <Send className="w-4 h-4" />
                     </Button>
