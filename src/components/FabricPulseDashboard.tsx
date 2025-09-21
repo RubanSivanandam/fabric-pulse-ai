@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import RTMSBot from './RTMSBot'
 import {
   Activity,
   AlertTriangle,
@@ -659,6 +660,8 @@ const FabricPulseDashboard = () => {
     return () => clearInterval(timeTimer);
   }, []);
 
+
+
   // GSAP animations
   useEffect(() => {
     if (headerRef.current && dashboardRef.current) {
@@ -1106,6 +1109,7 @@ const FabricPulseDashboard = () => {
   // Render main UI
   return (
     <div className="min-h-screen bg-background p-2 sm:p-4 lg:p-6 space-y-4 lg:space-y-6 overflow-x-hidden">
+    <div className="min-h-screen bg-background p-2 sm:p-4 lg:p-6 space-y-4 lg:space-y-6 overflow-x-hidden"> <RTMSBot /></div>
       {/* Header */}
       <motion.div
         ref={headerRef}
