@@ -445,7 +445,7 @@ const RTMSBot = () => {
       { id: "summarize", text: "Summarize efficiency for last 2 months", icon: <BarChart3 size={14} />, endpoint: "/api/ai/summarize" },
       { id: "suggest_ops", text: "Suggest corrective actions for low performing lines", icon: <TrendingUp size={14} />, endpoint: "/api/ai/suggest_ops" },
       { id: "predict_eff", text: "Predict efficiency for lines", icon: <FileText size={14} />, endpoint: "/api/ai/predict_efficiency" },
-      { id: "ultra_chat", text: "Ultra Chat Bot", icon: <Download size={14} />, endpoint: "/api/ai/ultra_chat_bot" },
+      { id: "ultra_chat", text: "Ultra Chat Bot", icon: <Download size={14} />, endpoint: "/api/ai/ultra_chatbot" },
     ],
     []
   );
@@ -566,7 +566,7 @@ const RTMSBot = () => {
             const answer = data?.summary || data?.result || JSON.stringify(data);
             setMessages((prev) => prev.map((m) => (m.id === botPlaceholder.id ? { ...m, content: String(answer) } : m)));
           }
-        } else if (endpoint.endsWith("/ultra_chat_bot") || endpoint.includes("/ultra_chat_bot") || endpoint.includes("ultra_chat")) {
+        } else if (endpoint.endsWith("/ultra_chatbot") || endpoint.includes("/ultra_chatbot") || endpoint.includes("ultra_chat")) {
           // Ultra chatbot: generic handler
           const body = payload ?? { query: trimmed, context_months: 2 };
           data = await apiPost(endpoint, body);
@@ -580,7 +580,7 @@ const RTMSBot = () => {
           setMessages((prev) => prev.map((m) => (m.id === botPlaceholder.id ? { ...m, content: String(answer) } : m)));
         }
       } else {
-        // Default to ultra_chat_bot if no endpoint chosen
+        // Default to ultra_chatbot if no endpoint chosen
         data = await apiPost("/api/ai/ultra_chatbot", { query: trimmed });
         const answer = data?.answer || data?.ai_prediction_text || JSON.stringify(data).slice(0, 3000);
         setMessages((prev) => prev.map((m) => (m.id === botPlaceholder.id ? { ...m, content: String(answer) } : m)));
@@ -632,7 +632,7 @@ const RTMSBot = () => {
 
   /* retry message on error */
   const handleRetry = (message) => {
-    // Resend the same content through default mapping (ultra_chat_bot)
+    // Resend the same content through default mapping (ultra_chatbot)
     sendMessage(message.content);
   };
 

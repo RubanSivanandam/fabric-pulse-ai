@@ -16,10 +16,9 @@ from dataclasses import dataclass, asdict
 from collections import defaultdict
 import time
 import threading
-from numpy import conj
-from ollama_client import OllamaClient, AIRequest 
-import tempfile
-from ollama_client import AIRequest
+# import tempfile
+from ollama_client import OllamaClient, AIRequest
+ollama_client = OllamaClient()
 from sympy import sqf
 from ultra_advanced_chatbot import UltraHighPerformanceChatbot, make_ultra_advanced_pdf_report
 from ultra_advanced_chatbot import ultra_high_performance_chatbot, make_ultra_advanced_pdf_report
@@ -80,6 +79,15 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
+
+AI_CACHE = {
+    "production_data": None,
+    "efficiency_data": None,
+    "chatbot_data": None,
+    "chatbot_summaries": None,
+    "chatbot_session": None,
+    "last_updated": None,
+}
 
 # Pydantic models for AI endpoints
 class AISummarizeRequest(BaseModel):
@@ -786,356 +794,356 @@ class EnhancedRTMSEngine:
 rtms_engine = EnhancedRTMSEngine()
 
 # AI Endpoints
-@app.post("/api/ai/summarize")
-async def ai_summarize(request: AISummarizeRequest, background_tasks: BackgroundTasks):
-    """Summarize efficiency analysis using Ollama AI with garment-specific insights"""
-    try:
-        if request.text:  
-            # ✅ Case 1: Summarize free text
-            if len(request.text) > 10000:
-                raise HTTPException(status_code=400, detail="Text too long (max 10,000 characters)")
+# @app.post("/api/ai/summarize")
+# async def ai_summarize(request: AISummarizeRequest, background_tasks: BackgroundTasks):
+#     """Summarize efficiency analysis using Ollama AI with garment-specific insights"""
+#     try:
+#         if request.text:  
+#             # ✅ Case 1: Summarize free text
+#             if len(request.text) > 10000:
+#                 raise HTTPException(status_code=400, detail="Text too long (max 10,000 characters)")
             
-            summary = await rtms_engine.ai_service.summarize_text(
-                request.text,
-                request.length
-            )
+#             summary = await rtms_engine.ai_service.summarize_text(
+#                 request.text,
+#                 request.length
+#             )
 
-        else:
-            # ✅ Case 2: Summarize efficiency analysis (with optional filters)
-            data = await rtms_engine.fetch_production_data(
-                unit_code=request.unit_code if request.unit_code else None,
-                floor_name=request.floor_name if request.floor_name else None,
-                line_name=request.line_name if request.line_name else None,
-                operation=request.operation if request.operation else None,
-                limit=request.limit
-            )
+#         else:
+#             # ✅ Case 2: Summarize efficiency analysis (with optional filters)
+#             data = await rtms_engine.fetch_production_data(
+#                 unit_code=request.unit_code if request.unit_code else None,
+#                 floor_name=request.floor_name if request.floor_name else None,
+#                 line_name=request.line_name if request.line_name else None,
+#                 operation=request.operation if request.operation else None,
+#                 limit=request.limit
+#             )
 
-            logger.info(f"Fetched {len(data)} records for summarization")
+#             logger.info(f"Fetched {len(data)} records for summarization")
 
-            if not data:
-                return {
-                    "status": "success",
-                    "summary": "No production data available for the given filters (or today’s date).",
-                    "filters_applied": {
-                        "unit_code": request.unit_code,
-                        "floor_name": request.floor_name,
-                        "line_name": request.line_name,
-                        "operation": request.operation
-                    }
-                }
+#             if not data:
+#                 return {
+#                     "status": "success",
+#                     "summary": "No production data available for the given filters (or today’s date).",
+#                     "filters_applied": {
+#                         "unit_code": request.unit_code,
+#                         "floor_name": request.floor_name,
+#                         "line_name": request.line_name,
+#                         "operation": request.operation
+#                     }
+#                 }
 
-            # ✅ Limit BEFORE analysis
-            max_records = 1500
-            data = data[:max_records]
+#             # ✅ Limit BEFORE analysis
+#             max_records = 1500
+#             data = data[:max_records]
 
-            # 🔹 Custom garment aggregation
-            from collections import defaultdict
-            grouped = defaultdict(lambda: {"Eff100": 0, "ProdnPcs": 0})
+#             # 🔹 Custom garment aggregation
+#             from collections import defaultdict
+#             grouped = defaultdict(lambda: {"Eff100": 0, "ProdnPcs": 0})
 
-            for row in data:
-                if str(row.ISFinPart).upper() == "Y":
-                    key = (row.LineName, row.StyleNo)  # Use attribute access
-                    grouped[key]["Eff100"] += row.Eff100 or 0
-                    grouped[key]["ProdnPcs"] += row.ProdnPcs or 0
+#             for row in data:
+#                 if str(row.ISFinPart).upper() == "Y":
+#                     key = (row.LineName, row.StyleNo)  # Use attribute access
+#                     grouped[key]["Eff100"] += row.Eff100 or 0
+#                     grouped[key]["ProdnPcs"] += row.ProdnPcs or 0
 
-            # 🔹 Convert grouped data to text
-            lines = []
-            for (line_name, style_no), agg in grouped.items():
-                target = agg["Eff100"]
-                actual = agg["ProdnPcs"]
-                lines.append(
-                    f"Line {line_name}, Style {style_no}: "
-                    f"Target {target} pcs, Actual {actual} pcs"
-                )
+#             # 🔹 Convert grouped data to text
+#             lines = []
+#             for (line_name, style_no), agg in grouped.items():
+#                 target = agg["Eff100"]
+#                 actual = agg["ProdnPcs"]
+#                 lines.append(
+#                     f"Line {line_name}, Style {style_no}: "
+#                     f"Target {target} pcs, Actual {actual} pcs"
+#                 )
 
-            analysis_text = "Garment production summary (final parts only):\n" + "\n".join(lines)
+#             analysis_text = "Garment production summary (final parts only):\n" + "\n".join(lines)
 
-            # ✅ Truncate if still too long
-            if len(analysis_text) > 10000:
-                logger.warning(f"Analysis text too large ({len(analysis_text)} chars). Truncating...")
-                analysis_text = analysis_text[:8000] + "\n...[TRUNCATED]..."
+#             # ✅ Truncate if still too long
+#             if len(analysis_text) > 10000:
+#                 logger.warning(f"Analysis text too large ({len(analysis_text)} chars). Truncating...")
+#                 analysis_text = analysis_text[:8000] + "\n...[TRUNCATED]..."
 
-            # 🔹 Pass context to AI
-            prompt = (
-                "You are analyzing garment factory production efficiency.\n"
-                "The data below represents Garment pieces produced in final parts, identified by ISFinPart = 'Y'.\n"
-                "Each record shows the total target (Eff100) and actual production (ProdnPcs) for the final part of a LineName,\n"
-                "along with the corresponding PartName and calculated efficiency (Actual / Target * 100).\n"
-                "A unit consists of different lines, each with various parts. The final part's production determines the line's efficiency.\n"
-                "For example, if a line has multiple operations on a part (e.g., stitching, finishing), the final operator's output (marked by ISFinPart = 'Y')\n"
-                "is used to calculate efficiency.\n"
-                "Please highlight efficiency gaps, underperforming lines, and provide polite, constructive insights to boost the team's morale\n"
-                "and support production managers in improving performance.\n\n"
-                f"{analysis_text}"
-            )
+#             # 🔹 Pass context to AI
+#             prompt = (
+#                 "You are analyzing garment factory production efficiency.\n"
+#                 "The data below represents Garment pieces produced in final parts, identified by ISFinPart = 'Y'.\n"
+#                 "Each record shows the total target (Eff100) and actual production (ProdnPcs) for the final part of a LineName,\n"
+#                 "along with the corresponding PartName and calculated efficiency (Actual / Target * 100).\n"
+#                 "A unit consists of different lines, each with various parts. The final part's production determines the line's efficiency.\n"
+#                 "For example, if a line has multiple operations on a part (e.g., stitching, finishing), the final operator's output (marked by ISFinPart = 'Y')\n"
+#                 "is used to calculate efficiency.\n"
+#                 "Please highlight efficiency gaps, underperforming lines, and provide polite, constructive insights to boost the team's morale\n"
+#                 "and support production managers in improving performance.\n\n"
+#                 f"{analysis_text}"
+#             )
 
-            summary = await rtms_engine.ai_service.summarize_text(prompt, request.length)
+#             summary = await rtms_engine.ai_service.summarize_text(prompt, request.length)
 
-        return {
-            "status": "success",
-            "summary": summary,
-            "filters_applied": {
-                "unit_code": request.unit_code,
-                "floor_name": request.floor_name,
-                "line_name": request.line_name,
-                "operation": request.operation
-            }
-        }
+#         return {
+#             "status": "success",
+#             "summary": summary,
+#             "filters_applied": {
+#                 "unit_code": request.unit_code,
+#                 "floor_name": request.floor_name,
+#                 "line_name": request.line_name,
+#                 "operation": request.operation
+#             }
+#         }
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"AI summarization failed: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"AI summarization failed: {str(e)}"
-        )
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         logger.error(f"AI summarization failed: {e}", exc_info=True)
+#         raise HTTPException(
+#             status_code=500,
+#             detail=f"AI summarization failed: {str(e)}"
+#         )
 
 
 
-@app.post("/api/ai/suggest_ops")
-async def ai_suggest_operations(request: AISuggestOperationsRequest):
-    """
-    Suggest operations using AI based on garment production data.
-    If no context is provided, inject predefined business suggestions text.
-    """
-    try:
-        # ✅ Rate limiting
-        client_ip = "127.0.0.1"
-        if not check_rate_limit(client_ip):
-            raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
+# @app.post("/api/ai/suggest_ops")
+# async def ai_suggest_operations(request: AISuggestOperationsRequest):
+#     """
+#     Suggest operations using AI based on garment production data.
+#     If no context is provided, inject predefined business suggestions text.
+#     """
+#     try:
+#         # ✅ Rate limiting
+#         client_ip = "127.0.0.1"
+#         if not check_rate_limit(client_ip):
+#             raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
 
-        # ✅ Validate context length
-        if request.context and len(request.context) > 8000:
-            raise HTTPException(status_code=400, detail="Context too long (max 8,000 characters)")
+#         # ✅ Validate context length
+#         if request.context and len(request.context) > 8000:
+#             raise HTTPException(status_code=400, detail="Context too long (max 8,000 characters)")
 
-        # ✅ If no context provided → inject Business Suggestions
-        if not request.context or not request.context.strip():
-            request.context = (
-                "Business Suggestions:\n\n"
-                "Line S1-1 is short by 300 pcs due to bottleneck at Attach Collar Band. "
-                "Suggest allocating an additional operator or improving workstation layout.\n\n"
-                "Line S3-1 underproduced by 200 pcs. Sleeve Hemming efficiency is 65%. "
-                "Recommend operator retraining or introducing semi-automatic hemming machines.\n\n"
-                "Lines S2-2 and S4-1 are performing above 90% efficiency. "
-                "Best practices here (machine setup, operator handling) should be shared across units.\n\n"
-                "Shift planning: Balance workload by redistributing operators "
-                "from S2-2 (excess capacity) to S1-1."
-            )
+#         # ✅ If no context provided → inject Business Suggestions
+#         if not request.context or not request.context.strip():
+#             request.context = (
+#                 "Business Suggestions:\n\n"
+#                 "Line S1-1 is short by 300 pcs due to bottleneck at Attach Collar Band. "
+#                 "Suggest allocating an additional operator or improving workstation layout.\n\n"
+#                 "Line S3-1 underproduced by 200 pcs. Sleeve Hemming efficiency is 65%. "
+#                 "Recommend operator retraining or introducing semi-automatic hemming machines.\n\n"
+#                 "Lines S2-2 and S4-1 are performing above 90% efficiency. "
+#                 "Best practices here (machine setup, operator handling) should be shared across units.\n\n"
+#                 "Shift planning: Balance workload by redistributing operators "
+#                 "from S2-2 (excess capacity) to S1-1."
+#             )
 
-            logger.debug(f"Injected request.context:\n{request.context}")
+#             logger.debug(f"Injected request.context:\n{request.context}")
 
-        # ✅ Pass to AI
-        suggestions_data = await rtms_engine.ai_service.suggest_operations(
-            request.context,
-            request.query
-        )
+#         # ✅ Pass to AI
+#         suggestions_data = await rtms_engine.ai_service.suggest_operations(
+#             request.context,
+#             request.query
+#         )
 
-        suggestions = [s.get("label", "Generic suggestion") for s in suggestions_data]
+#         suggestions = [s.get("label", "Generic suggestion") for s in suggestions_data]
 
-        return {
-            "success": True,
-            "context_used": request.context,  # 👈 shows exactly what was injected
-            "suggestions": suggestions
-        }
+#         return {
+#             "success": True,
+#             "context_used": request.context,  # 👈 shows exactly what was injected
+#             "suggestions": suggestions
+#         }
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"AI operation suggestion failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"AI operation suggestion failed: {str(e)}")
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         logger.error(f"AI operation suggestion failed: {e}", exc_info=True)
+#         raise HTTPException(status_code=500, detail=f"AI operation suggestion failed: {str(e)}")
 
     
-@app.post("/api/ai/completion")
-async def ai_completion(request: AICompletionRequest):
-    """Generate AI text completion based on a prompt, optionally using production data context.
-    The prompt can include garment production details for tailored responses."""
-    try:
-        # Check rate limit
-        client_ip = "127.0.0.1"  # Placeholder; in production, use request.client.host
-        if not check_rate_limit(client_ip):
-            raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
+# @app.post("/api/ai/completion")
+# async def ai_completion(request: AICompletionRequest):
+#     """Generate AI text completion based on a prompt, optionally using production data context.
+#     The prompt can include garment production details for tailored responses."""
+#     try:
+#         # Check rate limit
+#         client_ip = "127.0.0.1"  # Placeholder; in production, use request.client.host
+#         if not check_rate_limit(client_ip):
+#             raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
 
-        # Validate prompt length
-        if len(request.prompt) > 8000:
-            raise HTTPException(status_code=400, detail="Prompt too long (max 8,000 characters)")
+#         # Validate prompt length
+#         if len(request.prompt) > 8000:
+#             raise HTTPException(status_code=400, detail="Prompt too long (max 8,000 characters)")
 
-        # Fetch production data if no prompt is provided (optional enhancement)
-        if not request.prompt.strip():
-            data = await rtms_engine.fetch_production_data(limit=1000)
-            if not data:
-                return {
-                    "status": "success",
-                    "text": "No production data available. Please provide a prompt or check data filters."
-                }
-            # Generate prompt from data (similar to summarize logic)
-            grouped = defaultdict(lambda: {"Eff100": 0, "ProdnPcs": 0, "PartName": None})
-            for row in data:
-                if str(row.ISFinPart).upper() == "Y":
-                    key = row.LineName
-                    grouped[key]["Eff100"] = row.Eff100 or 0
-                    grouped[key]["ProdnPcs"] = row.ProdnPcs or 0
-                    grouped[key]["PartName"] = row.PartName
-            lines = [
-                f"Line {line_name}, Part {agg['PartName']}: Target {agg['Eff100']} pcs, Actual {agg['ProdnPcs']} pcs, Efficiency {(agg['ProdnPcs'] / agg['Eff100'] * 100):.1f}%"
-                for line_name, agg in grouped.items() if agg["Eff100"] > 0
-            ]
-            request.prompt = (
-                "You are analyzing garment factory production efficiency.\n"
-                "The data below represents final parts (ISFinPart = 'Y') with targets (Eff100) and actual production (ProdnPcs).\n"
-                "Provide insights or recommendations based on this data:\n\n"
-                + "\n".join(lines)
-            )
+#         # Fetch production data if no prompt is provided (optional enhancement)
+#         if not request.prompt.strip():
+#             data = await rtms_engine.fetch_production_data(limit=1000)
+#             if not data:
+#                 return {
+#                     "status": "success",
+#                     "text": "No production data available. Please provide a prompt or check data filters."
+#                 }
+#             # Generate prompt from data (similar to summarize logic)
+#             grouped = defaultdict(lambda: {"Eff100": 0, "ProdnPcs": 0, "PartName": None})
+#             for row in data:
+#                 if str(row.ISFinPart).upper() == "Y":
+#                     key = row.LineName
+#                     grouped[key]["Eff100"] = row.Eff100 or 0
+#                     grouped[key]["ProdnPcs"] = row.ProdnPcs or 0
+#                     grouped[key]["PartName"] = row.PartName
+#             lines = [
+#                 f"Line {line_name}, Part {agg['PartName']}: Target {agg['Eff100']} pcs, Actual {agg['ProdnPcs']} pcs, Efficiency {(agg['ProdnPcs'] / agg['Eff100'] * 100):.1f}%"
+#                 for line_name, agg in grouped.items() if agg["Eff100"] > 0
+#             ]
+#             request.prompt = (
+#                 "You are analyzing garment factory production efficiency.\n"
+#                 "The data below represents final parts (ISFinPart = 'Y') with targets (Eff100) and actual production (ProdnPcs).\n"
+#                 "Provide insights or recommendations based on this data:\n\n"
+#                 + "\n".join(lines)
+#             )
 
-        # Generate completion
-        completion = await rtms_engine.ai_service.generate_completion(request.prompt, request.maxTokens or 200)
-        logger.info(f"Generated completion with {len(completion.split())} words")
+#         # Generate completion
+#         completion = await rtms_engine.ai_service.generate_completion(request.prompt, request.maxTokens or 200)
+#         logger.info(f"Generated completion with {len(completion.split())} words")
 
-        return {
-            "status": "success",
-            "text": completion,
-            "prompt_used": request.prompt[:200] + "..." if len(request.prompt) > 200 else request.prompt
-        }
+#         return {
+#             "status": "success",
+#             "text": completion,
+#             "prompt_used": request.prompt[:200] + "..." if len(request.prompt) > 200 else request.prompt
+#         }
 
-    except HTTPException as http_err:
-        raise http_err
-    except Exception as e:
-        logger.error(f"AI completion failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="AI completion failed")
+#     except HTTPException as http_err:
+#         raise http_err
+#     except Exception as e:
+#         logger.error(f"AI completion failed: {e}", exc_info=True)
+#         raise HTTPException(status_code=500, detail="AI completion failed")
 
-# AI PREDICTION - BASED ON EFFICIENCY TRENDS
-@app.post("/api/ai/predict_efficiency")
-async def predict_efficiency(
-    unit_code: Optional[str] = Body(None),
-    floor_name: Optional[str] = Body(None),
-    line_name: Optional[str] = Body(None),
-    operation: Optional[str] = Body(None),
-    limit: int = Body(1000),
-    horizon: int = Body(7)
-):
-    """AI-driven prediction of garment line efficiency trends (Ollama-powered)."""
-    try:
-        # 1️⃣ Base query for last 2 months (raw data, no aggregation)
-        query = """
-        SELECT *
-        FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
-        WHERE [TranDate] >= DATEADD(MONTH, -2, CAST(GETDATE() AS DATE))
-          AND ProdnPcs > 0
-          AND LineName IS NOT NULL
-          AND StyleNo IS NOT NULL
-        """
+# # AI PREDICTION - BASED ON EFFICIENCY TRENDS
+# @app.post("/api/ai/predict_efficiency")
+# async def predict_efficiency(
+#     unit_code: Optional[str] = Body(None),
+#     floor_name: Optional[str] = Body(None),
+#     line_name: Optional[str] = Body(None),
+#     operation: Optional[str] = Body(None),
+#     limit: int = Body(1000),
+#     horizon: int = Body(7)
+# ):
+#     """AI-driven prediction of garment line efficiency trends (Ollama-powered)."""
+#     try:
+#         # 1️⃣ Base query for last 2 months (raw data, no aggregation)
+#         query = """
+#         SELECT *
+#         FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
+#         WHERE [TranDate] >= DATEADD(MONTH, -2, CAST(GETDATE() AS DATE))
+#           AND ProdnPcs > 0
+#           AND LineName IS NOT NULL
+#           AND StyleNo IS NOT NULL
+#         """
 
-        # 🔹 Add optional filters dynamically
-        conditions = []
-        if unit_code:
-            conditions.append(f"UnitCode = '{unit_code}'")
-        if floor_name:
-            conditions.append(f"FloorName = '{floor_name}'")
-        if line_name:
-            conditions.append(f"LineName = '{line_name}'")
-        if operation:
-            conditions.append(f"Operation = '{operation}'")
+#         # 🔹 Add optional filters dynamically
+#         conditions = []
+#         if unit_code:
+#             conditions.append(f"UnitCode = '{unit_code}'")
+#         if floor_name:
+#             conditions.append(f"FloorName = '{floor_name}'")
+#         if line_name:
+#             conditions.append(f"LineName = '{line_name}'")
+#         if operation:
+#             conditions.append(f"Operation = '{operation}'")
 
-        if conditions:
-            query += " AND " + " AND ".join(conditions)
+#         if conditions:
+#             query += " AND " + " AND ".join(conditions)
 
-        query += " ORDER BY TranDate DESC, LineName, StyleNo"
+#         query += " ORDER BY TranDate DESC, LineName, StyleNo"
 
-        # 🔹 Fetch data
-        import pyodbc
-        conn = pyodbc.connect(config.database.get_connection_string())
-        df = pd.read_sql(query, conn)
-        conn.close()
+#         # 🔹 Fetch data
+#         import pyodbc
+#         conn = pyodbc.connect(config.database.get_connection_string())
+#         df = pd.read_sql(query, conn)
+#         conn.close()
 
-        # 🔹 Log to console
-        print(f"📥 Data fetched from DB: {len(df)} rows")
-        if not df.empty:
-            print("🔎 Sample rows from DB:")
-            print(df.head(5).to_string(index=False))
+#         # 🔹 Log to console
+#         print(f"📥 Data fetched from DB: {len(df)} rows")
+#         if not df.empty:
+#             print("🔎 Sample rows from DB:")
+#             print(df.head(5).to_string(index=False))
 
-        if df.empty:
-            return {
-                "status": "no_data",
-                "message": "No production data available for AI-driven efficiency prediction",
-                "filters_applied": {
-                    "unit_code": unit_code,
-                    "floor_name": floor_name,
-                    "line_name": line_name,
-                    "operation": operation,
-                }
-            }
+#         if df.empty:
+#             return {
+#                 "status": "no_data",
+#                 "message": "No production data available for AI-driven efficiency prediction",
+#                 "filters_applied": {
+#                     "unit_code": unit_code,
+#                     "floor_name": floor_name,
+#                     "line_name": line_name,
+#                     "operation": operation,
+#                 }
+#             }
 
-        # 2️⃣ Build context for AI (using raw fields)
-        lines = []
-        for _, row in df.iterrows():
-            target = int(row.Eff100) if pd.notnull(row.Eff100) else 0
-            actual = int(row.ProdnPcs) if pd.notnull(row.ProdnPcs) else 0
-            efficiency = (actual / target * 100) if target > 0 else 0
-            gap = target - actual
+#         # 2️⃣ Build context for AI (using raw fields)
+#         lines = []
+#         for _, row in df.iterrows():
+#             target = int(row.Eff100) if pd.notnull(row.Eff100) else 0
+#             actual = int(row.ProdnPcs) if pd.notnull(row.ProdnPcs) else 0
+#             efficiency = (actual / target * 100) if target > 0 else 0
+#             gap = target - actual
 
-            lines.append(
-                f"Line {row.LineName} (Style {row.StyleNo}, Unit {row.UnitCode}, Floor {row.FloorName}) "
-                f"→ Target: {target}, Actual: {actual}, Gap: {gap}, "
-                f"Operator: {row.EmpName if pd.notnull(row.EmpName) else 'Unknown'}, "
-                f"Eff%: {row.EffPer:.1f}%, SAM: {row.SAM:.1f}"
-            )
+#             lines.append(
+#                 f"Line {row.LineName} (Style {row.StyleNo}, Unit {row.UnitCode}, Floor {row.FloorName}) "
+#                 f"→ Target: {target}, Actual: {actual}, Gap: {gap}, "
+#                 f"Operator: {row.EmpName if pd.notnull(row.EmpName) else 'Unknown'}, "
+#                 f"Eff%: {row.EffPer:.1f}%, SAM: {row.SAM:.1f}"
+#             )
 
-        context = "Garment Production Efficiency Report (last 2 months raw data):\n\n" + "\n".join(lines[:limit])
+#         context = "Garment Production Efficiency Report (last 2 months raw data):\n\n" + "\n".join(lines[:limit])
 
-        # 3️⃣ Build AI prompt
-        prompt = f"""
-                You are an expert garment industry AI consultant.
-                Based on the following production data, PREDICT efficiency trends for the next {horizon} days.
-                Return insights in structured JSON with the following fields:
+#         # 3️⃣ Build AI prompt
+#         prompt = f"""
+#                 You are an expert garment industry AI consultant.
+#                 Based on the following production data, PREDICT efficiency trends for the next {horizon} days.
+#                 Return insights in structured JSON with the following fields:
 
-                - prediction_summary: high-level summary of overall performance and risks
-                - line_predictions: array of lines with {{
-                    "line","style","unit","floor",
-                    "target","actual","efficiency","gap",
-                    "operator","risk","prediction","actions"
-                }}
-                - strategic_recommendations: array of high-level recommendations for management
+#                 - prediction_summary: high-level summary of overall performance and risks
+#                 - line_predictions: array of lines with {{
+#                     "line","style","unit","floor",
+#                     "target","actual","efficiency","gap",
+#                     "operator","risk","prediction","actions"
+#                 }}
+#                 - strategic_recommendations: array of high-level recommendations for management
 
-        Data:
-    {context}
-"""
+#         Data:
+#     {context}
+# """
 
-        # 4️⃣ Call AI service
-        ai_response = await rtms_engine.ai_service.generate_completion(prompt, max_tokens=600)
+#         # 4️⃣ Call AI service
+#         ai_response = await rtms_engine.ai_service.generate_completion(prompt, max_tokens=600)
 
-        # 5️⃣ Try to parse JSON
-        try:
-            ai_prediction = json.loads(ai_response)
-        except Exception:
-            ai_prediction = {"prediction_summary": ai_response}
+#         # 5️⃣ Try to parse JSON
+#         try:
+#             ai_prediction = json.loads(ai_response)
+#         except Exception:
+#             ai_prediction = {"prediction_summary": ai_response}
 
-        # 6️⃣ Human-readable summary (safe handling)
-        if "line_predictions" in ai_prediction and "strategic_recommendations" in ai_prediction:
-            ai_prediction_text = format_prediction_text(ai_prediction, horizon)
-        else:
-            ai_prediction_text = (
-                f"📊 AI Prediction Summary\n\n"
-                f"{ai_prediction.get('prediction_summary', 'No detailed predictions available.')}\n\n"
-                f"(Detailed line predictions were not provided by the AI.)"
-            )
+#         # 6️⃣ Human-readable summary (safe handling)
+#         if "line_predictions" in ai_prediction and "strategic_recommendations" in ai_prediction:
+#             ai_prediction_text = format_prediction_text(ai_prediction, horizon)
+#         else:
+#             ai_prediction_text = (
+#                 f"📊 AI Prediction Summary\n\n"
+#                 f"{ai_prediction.get('prediction_summary', 'No detailed predictions available.')}\n\n"
+#                 f"(Detailed line predictions were not provided by the AI.)"
+#             )
 
-        return {
-            "status": "success",
-            "rows_fetched": len(df),
-            "ai_prediction_json": ai_prediction,
-            "ai_prediction_text": ai_prediction_text,
-            "context_used": context,
-            "filters_applied": {
-                "unit_code": unit_code,
-                "floor_name": floor_name,
-                "line_name": line_name,
-                "operation": operation,
-            }
-        }
+#         return {
+#             "status": "success",
+#             "rows_fetched": len(df),
+#             "ai_prediction_json": ai_prediction,
+#             "ai_prediction_text": ai_prediction_text,
+#             "context_used": context,
+#             "filters_applied": {
+#                 "unit_code": unit_code,
+#                 "floor_name": floor_name,
+#                 "line_name": line_name,
+#                 "operation": operation,
+#             }
+#         }
 
-    except Exception as e:
-        logger.error(f"❌ AI-driven efficiency prediction failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="AI-driven efficiency prediction failed")
+#     except Exception as e:
+#         logger.error(f"❌ AI-driven efficiency prediction failed: {e}", exc_info=True)
+#         raise HTTPException(status_code=500, detail="AI-driven efficiency prediction failed")
 
 
 # Main API Endpoints
@@ -1352,459 +1360,459 @@ async def generate_pdf_report_api():
 Acts like ChatGPT (smooth typing animation in frontend).
 """
 
-import json
-import logging
-import time
-import pandas as pd
-import pyodbc
-from datetime import datetime
-from fastapi import Body, HTTPException
-from fastapi.responses import StreamingResponse
+# import json
+# import logging
+# import time
+# import pandas as pd
+# import pyodbc
+# from datetime import datetime
+# from fastapi import Body, HTTPException
+# from fastapi.responses import StreamingResponse
 
-from ollama_client import ollama_client  # must support chat + stream_chat
-# import config
+# from ollama_client import ollama_client  # must support chat + stream_chat
+# # import config
 
-logger = logging.getLogger("ultra_advanced_chatbot")
-
-
-
-# Ultra-Advanced Chatbot with Safe Chunking
+# logger = logging.getLogger("ultra_advanced_chatbot")
 
 
-@app.post("/api/ai/ultra_chatbot")
-async def ultra_advanced_ai_chatbot(
-    query: str = Body(..., description="Your question about production analytics"),
-    unit_code: Optional[str] = Body(None, description="Filter by unit code"),
-    floor_name: Optional[str] = Body(None, description="Filter by floor name"),
-    line_name: Optional[str] = Body(None, description="Filter by line name"),
-    operation: Optional[str] = Body(None, description="Filter by operation"),
-    part_name: Optional[str] = Body(None, description="Filter by part name"),
-    style_no: Optional[str] = Body(None, description="Filter by style number"),
-    data_range_months: int = Body(2, description="Data range in months (1-12)"),
-    max_records: int = Body(3000, description="Maximum records to analyze (cap 3000)"),
-    export: Optional[str] = Body(None, description="Export format: csv | pdf | None"),
-    reasoning_mode: str = Body("deep", description="Reasoning depth: basic, deep, expert")
-):
-    """
-    Ultra-Advanced Chatbot endpoint (safe chunking, summarization, streaming to Ollama).
-    """
 
-    # local imports and logging
-    import pandas as pd
-    import pyodbc
-    import httpx
-    from datetime import datetime
-    from reportlab.pdfgen import canvas  # fallback PDF generator if custom helper missing
+# # Ultra-Advanced Chatbot with Safe Chunking
 
-    logger = logging.getLogger("ultra_advanced_chatbot")
 
-    start_time = time.time()
+# @app.post("/api/ai/ultra_chatbot")
+# async def ultra_advanced_ai_chatbot(
+#     query: str = Body(..., description="Your question about production analytics"),
+#     unit_code: Optional[str] = Body(None, description="Filter by unit code"),
+#     floor_name: Optional[str] = Body(None, description="Filter by floor name"),
+#     line_name: Optional[str] = Body(None, description="Filter by line name"),
+#     operation: Optional[str] = Body(None, description="Filter by operation"),
+#     part_name: Optional[str] = Body(None, description="Filter by part name"),
+#     style_no: Optional[str] = Body(None, description="Filter by style number"),
+#     data_range_months: int = Body(2, description="Data range in months (1-12)"),
+#     max_records: int = Body(3000, description="Maximum records to analyze (cap 3000)"),
+#     export: Optional[str] = Body(None, description="Export format: csv | pdf | None"),
+#     reasoning_mode: str = Body("deep", description="Reasoning depth: basic, deep, expert")
+# ):
+#     """
+#     Ultra-Advanced Chatbot endpoint (safe chunking, summarization, streaming to Ollama).
+#     """
 
-    # Safeguard max_records
-    try:
-        max_records = int(max_records)
-    except Exception:
-        max_records = 3000
-    if max_records <= 0:
-        max_records = 1
-    if max_records > 3000:
-        max_records = 3000
+#     # local imports and logging
+#     import pandas as pd
+#     import pyodbc
+#     import httpx
+#     from datetime import datetime
+#     from reportlab.pdfgen import canvas  # fallback PDF generator if custom helper missing
 
-    # Essential columns to keep for context (minimize prompt size)
-    ESSENTIAL_COLS = [
-        "TranDate", "LineName", "StyleNo", "PartName",
-        "ProdnPcs", "EffPer", "SAM", "UnitCode", "FloorName", "EmpCode", "EmpName"
-    ]
+#     logger = logging.getLogger("ultra_advanced_chatbot")
 
-    # Try to locate PDF helper from your codebase
-    make_pdf_helper = None
-    try:
-        from ultra_advanced_chatbot import make_ultra_advanced_pdf_report
-        make_pdf_helper = make_ultra_advanced_pdf_report
-    except Exception:
-        try:
-            # maybe helper in same module
-            from fabric_pulse_ai_main import make_ultra_advanced_pdf_report
-            make_pdf_helper = make_ultra_advanced_pdf_report
-        except Exception:
-            make_pdf_helper = None
+#     start_time = time.time()
 
-    # Resolve DB connection string defensively
-    try:
-        conn_str = config.database.get_connection_string()
-    except Exception:
-        try:
-            conn_str = config.get_connection_string()
-        except Exception:
-            conn_str = os.environ.get("DATABASE_URL") or os.environ.get("DB_CONN")
+#     # Safeguard max_records
+#     try:
+#         max_records = int(max_records)
+#     except Exception:
+#         max_records = 3000
+#     if max_records <= 0:
+#         max_records = 1
+#     if max_records > 3000:
+#         max_records = 3000
 
-    if not conn_str:
-        logger.error("Database connection string not found (config.database or env DATABASE_URL/DB_CONN)")
-        raise HTTPException(status_code=500, detail="Database connection string not found")
+#     # Essential columns to keep for context (minimize prompt size)
+#     ESSENTIAL_COLS = [
+#         "TranDate", "LineName", "StyleNo", "PartName",
+#         "ProdnPcs", "EffPer", "SAM", "UnitCode", "FloorName", "EmpCode", "EmpName"
+#     ]
 
-    try:
-        # -------------------------
-        # 1) Fetch data from DB (same style as predict_efficiency)
-        # -------------------------
-        sql = f"""
-        SELECT TOP ({max_records})
-            LineName, EmpCode, EmpName, DeviceID,
-            StyleNo, OrderNo, Operation, SAM,
-            Eff100, Eff75, ProdnPcs, EffPer,
-            OperSeq, UsedMin, TranDate, UnitCode, 
-            PartName, FloorName, ReptType, PartSeq
-        FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
-        WHERE [TranDate] >= DATEADD(MONTH, -{int(data_range_months)}, CAST(GETDATE() AS DATE))
-          AND ProdnPcs > 0
-          AND LineName IS NOT NULL
-          AND StyleNo IS NOT NULL
-        """
+#     # Try to locate PDF helper from your codebase
+#     make_pdf_helper = None
+#     try:
+#         from ultra_advanced_chatbot import make_ultra_advanced_pdf_report
+#         make_pdf_helper = make_ultra_advanced_pdf_report
+#     except Exception:
+#         try:
+#             # maybe helper in same module
+#             from fabric_pulse_ai_main import make_ultra_advanced_pdf_report
+#             make_pdf_helper = make_ultra_advanced_pdf_report
+#         except Exception:
+#             make_pdf_helper = None
 
-        # dynamic filters (kept simple; follow your existing code pattern)
-        conditions = []
-        if unit_code:
-            conditions.append(f"UnitCode = '{unit_code}'")
-        if floor_name:
-            conditions.append(f"FloorName = '{floor_name}'")
-        if line_name:
-            conditions.append(f"LineName = '{line_name}'")
-        if operation:
-            conditions.append(f"Operation = '{operation}'")
-        if part_name:
-            conditions.append(f"PartName = '{part_name}'")
-        if style_no:
-            conditions.append(f"StyleNo = '{style_no}'")
+#     # Resolve DB connection string defensively
+#     try:
+#         conn_str = config.database.get_connection_string()
+#     except Exception:
+#         try:
+#             conn_str = config.get_connection_string()
+#         except Exception:
+#             conn_str = os.environ.get("DATABASE_URL") or os.environ.get("DB_CONN")
 
-        if conditions:
-            sql += " AND " + " AND ".join(conditions)
+#     if not conn_str:
+#         logger.error("Database connection string not found (config.database or env DATABASE_URL/DB_CONN)")
+#         raise HTTPException(status_code=500, detail="Database connection string not found")
 
-        sql += " ORDER BY TranDate DESC"
+#     try:
+#         # -------------------------
+#         # 1) Fetch data from DB (same style as predict_efficiency)
+#         # -------------------------
+#         sql = f"""
+#         SELECT TOP ({max_records})
+#             LineName, EmpCode, EmpName, DeviceID,
+#             StyleNo, OrderNo, Operation, SAM,
+#             Eff100, Eff75, ProdnPcs, EffPer,
+#             OperSeq, UsedMin, TranDate, UnitCode, 
+#             PartName, FloorName, ReptType, PartSeq
+#         FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
+#         WHERE [TranDate] >= DATEADD(MONTH, -{int(data_range_months)}, CAST(GETDATE() AS DATE))
+#           AND ProdnPcs > 0
+#           AND LineName IS NOT NULL
+#           AND StyleNo IS NOT NULL
+#         """
 
-        conn = pyodbc.connect(conn_str)
-        df = pd.read_sql(sql, conn)  # pandas will warn about DB-API, acceptable here
-        conn.close()
+#         # dynamic filters (kept simple; follow your existing code pattern)
+#         conditions = []
+#         if unit_code:
+#             conditions.append(f"UnitCode = '{unit_code}'")
+#         if floor_name:
+#             conditions.append(f"FloorName = '{floor_name}'")
+#         if line_name:
+#             conditions.append(f"LineName = '{line_name}'")
+#         if operation:
+#             conditions.append(f"Operation = '{operation}'")
+#         if part_name:
+#             conditions.append(f"PartName = '{part_name}'")
+#         if style_no:
+#             conditions.append(f"StyleNo = '{style_no}'")
 
-        logger.info(f"✅ Retrieved {len(df)} records from DB")
+#         if conditions:
+#             sql += " AND " + " AND ".join(conditions)
 
-        if df.empty:
-            return {
-                "status": "no_data",
-                "answer": f"No production data found for the specified filters ({data_range_months} months).",
-                "records_analyzed": 0,
-                "filters_applied": {
-                    "unit_code": unit_code,
-                    "floor_name": floor_name,
-                    "line_name": line_name,
-                    "operation": operation,
-                    "part_name": part_name,
-                    "style_no": style_no
-                }
-            }
+#         sql += " ORDER BY TranDate DESC"
 
-        # Keep only essential columns that exist in df
-        keep_cols = [c for c in ESSENTIAL_COLS if c in df.columns]
-        df_small = df[keep_cols].copy()
+#         conn = pyodbc.connect(conn_str)
+#         df = pd.read_sql(sql, conn)  # pandas will warn about DB-API, acceptable here
+#         conn.close()
 
-        # -------------------------
-        # 2) Chunking & local summarization
-        # -------------------------
-        SECTION_SIZE = 100  # conservative chunk size to keep prompt small
-        chunk_summaries: List[str] = []
+#         logger.info(f"✅ Retrieved {len(df)} records from DB")
 
-        def compress_summary_text(s: str) -> str:
-            # simple compression: shorten keys and drop samples
-            s = s.replace("records=", "r=").replace("avg_eff=", "aEff=").replace("min_eff=", "mEff=").replace("max_eff=", "MEff=").replace("total_prod=", "totP=").replace("top_lines=", "topL=")
-            if "samples:" in s:
-                s = s.split("samples:")[0]
-            if " | samples" in s:
-                s = s.split(" | samples")[0]
-            return s
+#         if df.empty:
+#             return {
+#                 "status": "no_data",
+#                 "answer": f"No production data found for the specified filters ({data_range_months} months).",
+#                 "records_analyzed": 0,
+#                 "filters_applied": {
+#                     "unit_code": unit_code,
+#                     "floor_name": floor_name,
+#                     "line_name": line_name,
+#                     "operation": operation,
+#                     "part_name": part_name,
+#                     "style_no": style_no
+#                 }
+#             }
 
-        def summarize_chunk(chunk: pd.DataFrame, idx: int) -> str:
-            try:
-                n = len(chunk)
-                parts = [f"Chunk{idx}: r={n}"]
-                if "EffPer" in chunk.columns:
-                    parts.append(f"aEff={chunk['EffPer'].mean():.1f}")
-                    parts.append(f"mEff={chunk['EffPer'].min():.1f}")
-                    parts.append(f"MEff={chunk['EffPer'].max():.1f}")
-                if "ProdnPcs" in chunk.columns:
-                    parts.append(f"totP={int(chunk['ProdnPcs'].sum())}")
-                # top lines by avg EffPer
-                if "LineName" in chunk.columns and "EffPer" in chunk.columns:
-                    top = chunk.groupby("LineName")["EffPer"].mean().sort_values(ascending=False).head(3)
-                    parts.append("topL=" + ", ".join([f"{ln}:{val:.1f}" for ln, val in top.items()]))
-                # small sample (1 row) to keep some context
-                sample = ""
-                try:
-                    sample_row = chunk.head(1).to_dict(orient="records")
-                    if sample_row:
-                        r = sample_row[0]
-                        sample = " | s=" + ", ".join([f"{k}={r[k]}" for k in r.keys() if k in ["LineName","StyleNo","PartName"] and r[k] is not None])
-                except Exception:
-                    sample = ""
-                summary = "; ".join(parts) + sample
-                return compress_summary_text(summary)
-            except Exception as e:
-                logger.debug(f"chunk summarization failed: {e}")
-                return f"Chunk{idx}: r={len(chunk)}"
+#         # Keep only essential columns that exist in df
+#         keep_cols = [c for c in ESSENTIAL_COLS if c in df.columns]
+#         df_small = df[keep_cols].copy()
 
-        for i in range(0, len(df_small), SECTION_SIZE):
-            chunk = df_small.iloc[i:i + SECTION_SIZE]
-            chunk_summaries.append(summarize_chunk(chunk, idx=(i // SECTION_SIZE) + 1))
+#         # -------------------------
+#         # 2) Chunking & local summarization
+#         # -------------------------
+#         SECTION_SIZE = 100  # conservative chunk size to keep prompt small
+#         chunk_summaries: List[str] = []
 
-        logger.info(f"✅ Created {len(chunk_summaries)} chunk summaries (section_size={SECTION_SIZE})")
+#         def compress_summary_text(s: str) -> str:
+#             # simple compression: shorten keys and drop samples
+#             s = s.replace("records=", "r=").replace("avg_eff=", "aEff=").replace("min_eff=", "mEff=").replace("max_eff=", "MEff=").replace("total_prod=", "totP=").replace("top_lines=", "topL=")
+#             if "samples:" in s:
+#                 s = s.split("samples:")[0]
+#             if " | samples" in s:
+#                 s = s.split(" | samples")[0]
+#             return s
 
-        # If too many summaries, aggregate globally instead of listing all
-        MAX_SUMMARIES_TO_INCLUDE = 12
-        if len(chunk_summaries) > MAX_SUMMARIES_TO_INCLUDE:
-            global_parts = []
-            if "EffPer" in df_small.columns:
-                global_parts.append(f"global_aEff={df_small['EffPer'].mean():.1f}")
-                global_parts.append(f"global_mEff={df_small['EffPer'].min():.1f}")
-                global_parts.append(f"global_MEff={df_small['EffPer'].max():.1f}")
-            if "ProdnPcs" in df_small.columns:
-                global_parts.append(f"global_totP={int(df_small['ProdnPcs'].sum())}")
-            if "LineName" in df_small.columns and "EffPer" in df_small.columns:
-                top_lines = df_small.groupby("LineName")["EffPer"].mean().sort_values(ascending=False).head(5)
-                global_parts.append("top_lines_overall=" + ", ".join([f"{ln}:{val:.1f}" for ln, val in top_lines.items()]))
-            aggregated = "AGGREGATED_SUMMARY: " + "; ".join(global_parts)
-            summaries_for_model = [aggregated]
-            logger.warning("Too many summaries -> using aggregated summary for final prompt (keeps prompt small)")
-        else:
-            summaries_for_model = chunk_summaries
+#         def summarize_chunk(chunk: pd.DataFrame, idx: int) -> str:
+#             try:
+#                 n = len(chunk)
+#                 parts = [f"Chunk{idx}: r={n}"]
+#                 if "EffPer" in chunk.columns:
+#                     parts.append(f"aEff={chunk['EffPer'].mean():.1f}")
+#                     parts.append(f"mEff={chunk['EffPer'].min():.1f}")
+#                     parts.append(f"MEff={chunk['EffPer'].max():.1f}")
+#                 if "ProdnPcs" in chunk.columns:
+#                     parts.append(f"totP={int(chunk['ProdnPcs'].sum())}")
+#                 # top lines by avg EffPer
+#                 if "LineName" in chunk.columns and "EffPer" in chunk.columns:
+#                     top = chunk.groupby("LineName")["EffPer"].mean().sort_values(ascending=False).head(3)
+#                     parts.append("topL=" + ", ".join([f"{ln}:{val:.1f}" for ln, val in top.items()]))
+#                 # small sample (1 row) to keep some context
+#                 sample = ""
+#                 try:
+#                     sample_row = chunk.head(1).to_dict(orient="records")
+#                     if sample_row:
+#                         r = sample_row[0]
+#                         sample = " | s=" + ", ".join([f"{k}={r[k]}" for k in r.keys() if k in ["LineName","StyleNo","PartName"] and r[k] is not None])
+#                 except Exception:
+#                     sample = ""
+#                 summary = "; ".join(parts) + sample
+#                 return compress_summary_text(summary)
+#             except Exception as e:
+#                 logger.debug(f"chunk summarization failed: {e}")
+#                 return f"Chunk{idx}: r={len(chunk)}"
 
-        # -------------------------
-        # 3) Build final prompt (concise)
-        # -------------------------
-        base_prompt = f"""You are an expert garment production analytics assistant.
-User query: {query}
+#         for i in range(0, len(df_small), SECTION_SIZE):
+#             chunk = df_small.iloc[i:i + SECTION_SIZE]
+#             chunk_summaries.append(summarize_chunk(chunk, idx=(i // SECTION_SIZE) + 1))
 
-You MUST answer using only the provided production summaries.
-Respond structured as:
-1) Analytical Findings
-2) Diagnostic Analysis (root causes)
-3) Predictive Forecast
-4) Strategic Recommendations
-5) Comparative Benchmarks
+#         logger.info(f"✅ Created {len(chunk_summaries)} chunk summaries (section_size={SECTION_SIZE})")
 
-Be professional, concise, and cite example summary lines or aggregated stats when useful.
-"""
+#         # If too many summaries, aggregate globally instead of listing all
+#         MAX_SUMMARIES_TO_INCLUDE = 12
+#         if len(chunk_summaries) > MAX_SUMMARIES_TO_INCLUDE:
+#             global_parts = []
+#             if "EffPer" in df_small.columns:
+#                 global_parts.append(f"global_aEff={df_small['EffPer'].mean():.1f}")
+#                 global_parts.append(f"global_mEff={df_small['EffPer'].min():.1f}")
+#                 global_parts.append(f"global_MEff={df_small['EffPer'].max():.1f}")
+#             if "ProdnPcs" in df_small.columns:
+#                 global_parts.append(f"global_totP={int(df_small['ProdnPcs'].sum())}")
+#             if "LineName" in df_small.columns and "EffPer" in df_small.columns:
+#                 top_lines = df_small.groupby("LineName")["EffPer"].mean().sort_values(ascending=False).head(5)
+#                 global_parts.append("top_lines_overall=" + ", ".join([f"{ln}:{val:.1f}" for ln, val in top_lines.items()]))
+#             aggregated = "AGGREGATED_SUMMARY: " + "; ".join(global_parts)
+#             summaries_for_model = [aggregated]
+#             logger.warning("Too many summaries -> using aggregated summary for final prompt (keeps prompt small)")
+#         else:
+#             summaries_for_model = chunk_summaries
 
-        prompt_parts = [base_prompt, "\nPRODUCTION_SUMMARIES:"]
-        for s in summaries_for_model:
-            prompt_parts.append(f"- {s}")
-        final_prompt = "\n".join(prompt_parts)
+#         # -------------------------
+#         # 3) Build final prompt (concise)
+#         # -------------------------
+#         base_prompt = f"""You are an expert garment production analytics assistant.
+# User query: {query}
 
-        # Safe prompt size checks (conservative)
-        MAX_PROMPT_CHARS = 32000
-        APPROX_TOKEN_LIMIT = 3800  # approx tokens to keep below 4096
-        approx_tokens = int(len(final_prompt) / 4)
-        logger.info(f"[PROMPT SIZE] chars={len(final_prompt)} approx_tokens={approx_tokens} summaries_included={len(summaries_for_model)}")
+# You MUST answer using only the provided production summaries.
+# Respond structured as:
+# 1) Analytical Findings
+# 2) Diagnostic Analysis (root causes)
+# 3) Predictive Forecast
+# 4) Strategic Recommendations
+# 5) Comparative Benchmarks
 
-        if approx_tokens > APPROX_TOKEN_LIMIT or len(final_prompt) > MAX_PROMPT_CHARS:
-            # aggressively trim summaries if still too large
-            keep_n = min(len(summaries_for_model), MAX_SUMMARIES_TO_INCLUDE)
-            final_prompt = base_prompt + "\nPRODUCTION_SUMMARIES:\n" + "\n".join([f"- {s}" for s in summaries_for_model[:keep_n]])
-            logger.warning("Final prompt exceeded safe budget -> truncated summaries included")
-            approx_tokens = int(len(final_prompt) / 4)
+# Be professional, concise, and cite example summary lines or aggregated stats when useful.
+# """
 
-        # -------------------------
-        # 4) Streaming helper(s) to call Ollama
-        # -------------------------
-        OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+#         prompt_parts = [base_prompt, "\nPRODUCTION_SUMMARIES:"]
+#         for s in summaries_for_model:
+#             prompt_parts.append(f"- {s}")
+#         final_prompt = "\n".join(prompt_parts)
 
-        async def _stream_from_ollama_http(prompt_text: str, model: str = "llama3.2:3b", max_tokens: int = 1000, temperature: float = 0.25):
-            """
-            Stream from Ollama HTTP /api/generate (streaming)
-            Yields raw string fragments to be appended to answer.
-            """
-            endpoint = f"{OLLAMA_URL}/api/generate"
-            payload = {
-                "model": model,
-                "prompt": prompt_text,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "stream": True
-            }
-            headers = {"Content-Type": "application/json"}
-            async with httpx.AsyncClient(timeout=180.0) as client:
-                async with client.stream("POST", endpoint, json=payload, headers=headers) as resp:
-                    resp.raise_for_status()
-                    # Ollama often returns newline-delimited JSON or text. iterate lines.
-                    async for line in resp.aiter_lines():
-                        if not line:
-                            continue
-                        line = line.strip()
-                        # try parse JSON
-                        try:
-                            j = json.loads(line)
-                            # attempt to extract text content from several common shapes
-                            # 1) {"choices":[{"delta":{"content":"..."}},...]}
-                            if isinstance(j, dict):
-                                # common keys: 'choices', 'message', 'response', 'content', 'text'
-                                text_candidate = None
-                                # openai style
-                                if "choices" in j and isinstance(j["choices"], list):
-                                    for ch in j["choices"]:
-                                        delta = ch.get("delta") or ch.get("message")
-                                        if isinstance(delta, dict):
-                                            # nested content fields
-                                            text_candidate = delta.get("content") or delta.get("text") or delta.get("message") or text_candidate
-                                # other shapes
-                                if text_candidate is None:
-                                    text_candidate = j.get("response") or j.get("message") or j.get("text") or j.get("content")
-                                if text_candidate is not None:
-                                    yield str(text_candidate)
-                                    continue
-                        except Exception:
-                            # not parsable as JSON; send raw line content
-                            pass
-                        yield line
+#         # Safe prompt size checks (conservative)
+#         MAX_PROMPT_CHARS = 32000
+#         APPROX_TOKEN_LIMIT = 3800  # approx tokens to keep below 4096
+#         approx_tokens = int(len(final_prompt) / 4)
+#         logger.info(f"[PROMPT SIZE] chars={len(final_prompt)} approx_tokens={approx_tokens} summaries_included={len(summaries_for_model)}")
 
-        # Try to use a local ollama_client module (if exists and has streaming)
-        local_ollama = None
-        try:
-            import ollama_client as oc
-            local_ollama = oc
-        except Exception:
-            local_ollama = None
+#         if approx_tokens > APPROX_TOKEN_LIMIT or len(final_prompt) > MAX_PROMPT_CHARS:
+#             # aggressively trim summaries if still too large
+#             keep_n = min(len(summaries_for_model), MAX_SUMMARIES_TO_INCLUDE)
+#             final_prompt = base_prompt + "\nPRODUCTION_SUMMARIES:\n" + "\n".join([f"- {s}" for s in summaries_for_model[:keep_n]])
+#             logger.warning("Final prompt exceeded safe budget -> truncated summaries included")
+#             approx_tokens = int(len(final_prompt) / 4)
 
-        async def _stream_from_local_client_if_possible(prompt_text: str, model: str = "llama3.2:3b", max_tokens: int = 1000, temperature: float = 0.25):
-            """
-            Try a variety of possible streaming methods on local ollama_client.
-            If not available or raises, this function will raise to let caller fallback to HTTP.
-            """
-            if not local_ollama:
-                raise AttributeError("local ollama_client not present")
-            # candidate method names
-            candidates = ["stream_chat", "stream", "generate", "stream_generate", "stream_chat_completion", "stream_response"]
-            for name in candidates:
-                if hasattr(local_ollama, name):
-                    method = getattr(local_ollama, name)
-                    # we try to call with several common signatures; assume async generator
-                    try:
-                        # try signature: method(prompt=..., stream=True, max_tokens=...)
-                        async for frag in method(prompt=prompt_text, stream=True, max_tokens=max_tokens, temperature=temperature):
-                            yield str(frag)
-                        return
-                    except TypeError:
-                        # try other signatures
-                        try:
-                            async for frag in method(prompt_text, stream=True):
-                                yield str(frag)
-                            return
-                        except Exception:
-                            continue
-                    except Exception as e:
-                        # method exists but failed; try next
-                        logger.debug(f"local ollama method {name} failed: {e}")
-                        continue
-            # no candidate worked
-            raise AttributeError("local ollama_client had no usable streaming method")
+#         # -------------------------
+#         # 4) Streaming helper(s) to call Ollama
+#         # -------------------------
+#         OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
-        # -------------------------
-        # 5) StreamingResponse generator (streams JSON with answer field token-by-token)
-        # -------------------------
-        async def response_stream():
-            try:
-                # Start JSON object and open answer string
-                yield '{"status":"success","answer":"'
+#         async def _stream_from_ollama_http(prompt_text: str, model: str = "llama3.2:3b", max_tokens: int = 1000, temperature: float = 0.25):
+#             """
+#             Stream from Ollama HTTP /api/generate (streaming)
+#             Yields raw string fragments to be appended to answer.
+#             """
+#             endpoint = f"{OLLAMA_URL}/api/generate"
+#             payload = {
+#                 "model": model,
+#                 "prompt": prompt_text,
+#                 "max_tokens": max_tokens,
+#                 "temperature": temperature,
+#                 "stream": True
+#             }
+#             headers = {"Content-Type": "application/json"}
+#             async with httpx.AsyncClient(timeout=180.0) as client:
+#                 async with client.stream("POST", endpoint, json=payload, headers=headers) as resp:
+#                     resp.raise_for_status()
+#                     # Ollama often returns newline-delimited JSON or text. iterate lines.
+#                     async for line in resp.aiter_lines():
+#                         if not line:
+#                             continue
+#                         line = line.strip()
+#                         # try parse JSON
+#                         try:
+#                             j = json.loads(line)
+#                             # attempt to extract text content from several common shapes
+#                             # 1) {"choices":[{"delta":{"content":"..."}},...]}
+#                             if isinstance(j, dict):
+#                                 # common keys: 'choices', 'message', 'response', 'content', 'text'
+#                                 text_candidate = None
+#                                 # openai style
+#                                 if "choices" in j and isinstance(j["choices"], list):
+#                                     for ch in j["choices"]:
+#                                         delta = ch.get("delta") or ch.get("message")
+#                                         if isinstance(delta, dict):
+#                                             # nested content fields
+#                                             text_candidate = delta.get("content") or delta.get("text") or delta.get("message") or text_candidate
+#                                 # other shapes
+#                                 if text_candidate is None:
+#                                     text_candidate = j.get("response") or j.get("message") or j.get("text") or j.get("content")
+#                                 if text_candidate is not None:
+#                                     yield str(text_candidate)
+#                                     continue
+#                         except Exception:
+#                             # not parsable as JSON; send raw line content
+#                             pass
+#                         yield line
 
-                used_method = "none"
-                # First try local client streaming (if present)
-                try:
-                    async for frag in _stream_from_local_client_if_possible(final_prompt, max_tokens=1000, temperature=0.25):
-                        used_method = "local_ollama"
-                        frag_text = frag or ""
-                        frag_escaped = frag_text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-                        yield frag_escaped
-                except Exception as e_local:
-                    logger.debug(f"local streaming not available or failed: {e_local}")
-                    # fall back to HTTP streaming
-                    async for frag in _stream_from_ollama_http(final_prompt, max_tokens=1000, temperature=0.25):
-                        used_method = "http_ollama"
-                        frag_text = frag or ""
-                        frag_escaped = frag_text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-                        yield frag_escaped
+#         # Try to use a local ollama_client module (if exists and has streaming)
+#         local_ollama = None
+#         try:
+#             import ollama_client as oc
+#             local_ollama = oc
+#         except Exception:
+#             local_ollama = None
 
-                # Close answer field and add metadata
-                yield '","records_analyzed":' + str(len(df_small))
+#         async def _stream_from_local_client_if_possible(prompt_text: str, model: str = "llama3.2:3b", max_tokens: int = 1000, temperature: float = 0.25):
+#             """
+#             Try a variety of possible streaming methods on local ollama_client.
+#             If not available or raises, this function will raise to let caller fallback to HTTP.
+#             """
+#             if not local_ollama:
+#                 raise AttributeError("local ollama_client not present")
+#             # candidate method names
+#             candidates = ["stream_chat", "stream", "generate", "stream_generate", "stream_chat_completion", "stream_response"]
+#             for name in candidates:
+#                 if hasattr(local_ollama, name):
+#                     method = getattr(local_ollama, name)
+#                     # we try to call with several common signatures; assume async generator
+#                     try:
+#                         # try signature: method(prompt=..., stream=True, max_tokens=...)
+#                         async for frag in method(prompt=prompt_text, stream=True, max_tokens=max_tokens, temperature=temperature):
+#                             yield str(frag)
+#                         return
+#                     except TypeError:
+#                         # try other signatures
+#                         try:
+#                             async for frag in method(prompt_text, stream=True):
+#                                 yield str(frag)
+#                             return
+#                         except Exception:
+#                             continue
+#                     except Exception as e:
+#                         # method exists but failed; try next
+#                         logger.debug(f"local ollama method {name} failed: {e}")
+#                         continue
+#             # no candidate worked
+#             raise AttributeError("local ollama_client had no usable streaming method")
 
-                filters = {
-                    "unit_code": unit_code,
-                    "floor_name": floor_name,
-                    "line_name": line_name,
-                    "operation": operation,
-                    "part_name": part_name,
-                    "style_no": style_no
-                }
-                yield ',"filters":' + json.dumps(filters)
+#         # -------------------------
+#         # 5) StreamingResponse generator (streams JSON with answer field token-by-token)
+#         # -------------------------
+#         async def response_stream():
+#             try:
+#                 # Start JSON object and open answer string
+#                 yield '{"status":"success","answer":"'
 
-                # Exports: create CSV or PDF in temp and include path in metadata
-                export_path = None
-                try:
-                    if export == "csv":
-                        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        fd, csv_path = tempfile.mkstemp(prefix=f"ultra_chatbot_{ts}_", suffix=".csv")
-                        os.close(fd)
-                        df.to_csv(csv_path, index=False)
-                        export_path = csv_path
-                    elif export == "pdf":
-                        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        pdf_path = os.path.join(tempfile.gettempdir(), f"ultra_chatbot_{ts}.pdf")
-                        if make_pdf_helper:
-                            try:
-                                make_pdf_helper(df, pdf_path, "Ultra Chatbot Report", "\n".join(summaries_for_model))
-                                export_path = pdf_path
-                            except Exception as e:
-                                logger.warning(f"make_pdf_helper failed: {e}; will attempt simple PDF generation")
-                        if export_path is None:
-                            # fallback simple PDF generator
-                            try:
-                                c = canvas.Canvas(pdf_path, pagesize=(595, 842))  # A4 approx
-                                c.setFont("Helvetica-Bold", 14)
-                                c.drawString(40, 800, "Ultra Chatbot - Production Summaries")
-                                c.setFont("Helvetica", 10)
-                                y = 780
-                                for s in summaries_for_model:
-                                    if y < 60:
-                                        c.showPage()
-                                        y = 800
-                                    c.drawString(40, y, (s[:120]))
-                                    y -= 14
-                                c.save()
-                                export_path = pdf_path
-                            except Exception as e:
-                                logger.error(f"PDF fallback generation failed: {e}")
-                                export_path = None
-                except Exception as e_export:
-                    logger.error(f"Export generation error: {e_export}", exc_info=True)
-                    export_path = None
+#                 used_method = "none"
+#                 # First try local client streaming (if present)
+#                 try:
+#                     async for frag in _stream_from_local_client_if_possible(final_prompt, max_tokens=1000, temperature=0.25):
+#                         used_method = "local_ollama"
+#                         frag_text = frag or ""
+#                         frag_escaped = frag_text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+#                         yield frag_escaped
+#                 except Exception as e_local:
+#                     logger.debug(f"local streaming not available or failed: {e_local}")
+#                     # fall back to HTTP streaming
+#                     async for frag in _stream_from_ollama_http(final_prompt, max_tokens=1000, temperature=0.25):
+#                         used_method = "http_ollama"
+#                         frag_text = frag or ""
+#                         frag_escaped = frag_text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+#                         yield frag_escaped
 
-                processing_time = round(time.time() - start_time, 2)
-                meta = {
-                    "processing_time": processing_time,
-                    "columns_detected": list(df_small.columns),
-                    "chunks": math.ceil(len(df_small) / SECTION_SIZE),
-                    "export_file": export_path,
-                    "ollama_mode": used_method
-                }
-                yield ',"metadata":' + json.dumps(meta)
+#                 # Close answer field and add metadata
+#                 yield '","records_analyzed":' + str(len(df_small))
 
-                # End JSON
-                yield "}"
-            except Exception as e_stream:
-                logger.error(f"Streaming generator error: {e_stream}", exc_info=True)
-                # Send minimal error JSON for client to parse
-                yield '{"status":"error","answer":"Chatbot streaming failed due to internal error."}'
+#                 filters = {
+#                     "unit_code": unit_code,
+#                     "floor_name": floor_name,
+#                     "line_name": line_name,
+#                     "operation": operation,
+#                     "part_name": part_name,
+#                     "style_no": style_no
+#                 }
+#                 yield ',"filters":' + json.dumps(filters)
 
-        # Return streaming response (frontend can animate the "answer" string)
-        return StreamingResponse(response_stream(), media_type="application/json")
+#                 # Exports: create CSV or PDF in temp and include path in metadata
+#                 export_path = None
+#                 try:
+#                     if export == "csv":
+#                         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+#                         fd, csv_path = tempfile.mkstemp(prefix=f"ultra_chatbot_{ts}_", suffix=".csv")
+#                         os.close(fd)
+#                         df.to_csv(csv_path, index=False)
+#                         export_path = csv_path
+#                     elif export == "pdf":
+#                         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+#                         pdf_path = os.path.join(tempfile.gettempdir(), f"ultra_chatbot_{ts}.pdf")
+#                         if make_pdf_helper:
+#                             try:
+#                                 make_pdf_helper(df, pdf_path, "Ultra Chatbot Report", "\n".join(summaries_for_model))
+#                                 export_path = pdf_path
+#                             except Exception as e:
+#                                 logger.warning(f"make_pdf_helper failed: {e}; will attempt simple PDF generation")
+#                         if export_path is None:
+#                             # fallback simple PDF generator
+#                             try:
+#                                 c = canvas.Canvas(pdf_path, pagesize=(595, 842))  # A4 approx
+#                                 c.setFont("Helvetica-Bold", 14)
+#                                 c.drawString(40, 800, "Ultra Chatbot - Production Summaries")
+#                                 c.setFont("Helvetica", 10)
+#                                 y = 780
+#                                 for s in summaries_for_model:
+#                                     if y < 60:
+#                                         c.showPage()
+#                                         y = 800
+#                                     c.drawString(40, y, (s[:120]))
+#                                     y -= 14
+#                                 c.save()
+#                                 export_path = pdf_path
+#                             except Exception as e:
+#                                 logger.error(f"PDF fallback generation failed: {e}")
+#                                 export_path = None
+#                 except Exception as e_export:
+#                     logger.error(f"Export generation error: {e_export}", exc_info=True)
+#                     export_path = None
 
-    except Exception as e:
-        logger.error(f"ultra_chatbot endpoint error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Chatbot Error: {str(e)}")
+#                 processing_time = round(time.time() - start_time, 2)
+#                 meta = {
+#                     "processing_time": processing_time,
+#                     "columns_detected": list(df_small.columns),
+#                     "chunks": math.ceil(len(df_small) / SECTION_SIZE),
+#                     "export_file": export_path,
+#                     "ollama_mode": used_method
+#                 }
+#                 yield ',"metadata":' + json.dumps(meta)
+
+#                 # End JSON
+#                 yield "}"
+#             except Exception as e_stream:
+#                 logger.error(f"Streaming generator error: {e_stream}", exc_info=True)
+#                 # Send minimal error JSON for client to parse
+#                 yield '{"status":"error","answer":"Chatbot streaming failed due to internal error."}'
+
+#         # Return streaming response (frontend can animate the "answer" string)
+#         return StreamingResponse(response_stream(), media_type="application/json")
+
+#     except Exception as e:
+#         logger.error(f"ultra_chatbot endpoint error: {e}", exc_info=True)
+#         raise HTTPException(status_code=500, detail=f"Chatbot Error: {str(e)}")
 
 
 # Enhanced version of your existing chatbot with backward compatibility
@@ -1955,6 +1963,373 @@ Be professional, concise, and cite example summary lines or aggregated stats whe
 #             "records_used": len(df),
 #             "enhancement_level": "fallback_mode"
 #         }
+
+
+from ollama_client import ollama_client  # AI service
+logger = logging.getLogger("ai_api")
+# ==================================================
+# REFRESH + STATUS ENDPOINTS
+# ==================================================
+@app.post("/api/ai/refresh_cache")
+async def refresh_ai_cache():
+    """
+    Refresh AI cache from DB and preload summaries into Ollama persistent session.
+    """
+    try:
+        conn_str = config.database.get_connection_string()
+        conn = pyodbc.connect(conn_str)
+
+        # ========== 1. Fetch Production Data ==========
+        sql_prod = """
+        SELECT TOP (2000)
+            LineName, EmpCode, EmpName, DeviceID,
+            StyleNo, OrderNo, Operation, SAM,
+            Eff100, Eff75, ProdnPcs, EffPer,
+            OperSeq, UsedMin, TranDate, UnitCode, 
+            PartName, FloorName, ReptType, PartSeq, ISFinPart
+        FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
+        WHERE [TranDate] >= DATEADD(DAY, -2, CAST(GETDATE() AS DATE))
+          AND ProdnPcs > 0
+          AND LineName IS NOT NULL
+          AND StyleNo IS NOT NULL
+        ORDER BY TranDate DESC
+        """
+        df_prod = pd.read_sql(sql_prod, conn)
+
+        # ========== 2. Fetch Efficiency Data ==========
+        sql_eff = """
+        SELECT TOP (3000)
+            LineName, StyleNo, PartName, Operation, UnitCode, FloorName,
+            Eff100, ProdnPcs, EffPer, TranDate
+        FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
+        WHERE [TranDate] >= DATEADD(MONTH, -2, CAST(GETDATE() AS DATE))
+          AND ProdnPcs > 0
+          AND LineName IS NOT NULL
+          AND StyleNo IS NOT NULL
+        ORDER BY TranDate DESC
+        """
+        df_eff = pd.read_sql(sql_eff, conn)
+
+        # ========== 3. Fetch Chatbot Data ==========
+        sql_chat = """
+        SELECT TOP (3000)
+            LineName, StyleNo, PartName, Operation, UnitCode, FloorName,
+            Eff100, ProdnPcs, EffPer, TranDate, EmpCode, EmpName
+        FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
+        WHERE [TranDate] >= DATEADD(MONTH, -2, CAST(GETDATE() AS DATE))
+          AND ProdnPcs > 0
+          AND LineName IS NOT NULL
+          AND StyleNo IS NOT NULL
+        ORDER BY TranDate DESC
+        """
+        df_chat = pd.read_sql(sql_chat, conn)
+
+        conn.close()
+
+        # ========== 4. Summarize Chatbot Data ==========
+        SECTION_SIZE = 100
+        chunk_summaries = []
+
+        def summarize_chunk(chunk: pd.DataFrame, idx: int) -> str:
+            n = len(chunk)
+            parts = [f"Chunk{idx}: r={n}"]
+            if "EffPer" in chunk.columns:
+                parts.append(f"aEff={chunk['EffPer'].mean():.1f}")
+                parts.append(f"mEff={chunk['EffPer'].min():.1f}")
+                parts.append(f"MEff={chunk['EffPer'].max():.1f}")
+            if "ProdnPcs" in chunk.columns:
+                parts.append(f"totP={int(chunk['ProdnPcs'].sum())}")
+            if "LineName" in chunk.columns and "EffPer" in chunk.columns:
+                top = chunk.groupby("LineName")["EffPer"].mean().sort_values(ascending=False).head(3)
+                parts.append("topL=" + ", ".join([f"{ln}:{val:.1f}" for ln, val in top.items()]))
+            return "; ".join(parts)
+
+        for i in range(0, len(df_chat), SECTION_SIZE):
+            chunk = df_chat.iloc[i:i+SECTION_SIZE]
+            chunk_summaries.append(summarize_chunk(chunk, idx=(i//SECTION_SIZE)+1))
+
+        summaries_for_model = (
+            chunk_summaries
+            if len(chunk_summaries) <= 12
+            else [f"AGGREGATED: avgEff={df_chat['EffPer'].mean():.1f}, totP={int(df_chat['ProdnPcs'].sum())}"]
+        )
+
+        # ========== 5. Store in Cache ==========
+        AI_CACHE["production_data"] = df_prod
+        AI_CACHE["efficiency_data"] = df_eff
+        AI_CACHE["chatbot_data"] = df_chat
+        AI_CACHE["chatbot_summaries"] = summaries_for_model
+        AI_CACHE["last_updated"] = datetime.utcnow()
+
+        # ========== 6. Preload into Ollama Session ==========
+        system_prompt = (
+            "You are a garment production analytics assistant.\n"
+            "The following summaries represent the latest production data:\n"
+            + "\n".join(summaries_for_model)
+        )
+
+        async def preload_session():
+            session_id = f"chatbot_{int(time.time())}"
+            AI_CACHE["chatbot_session"] = session_id
+            # This seeds the model with context
+            async for _ in ollama_client.stream_chat(
+                model="llama3.2:3b",
+                messages=[{"role": "system", "content": system_prompt}],
+                options={"persist": True, "session": session_id}
+            ):
+                # ignore stream output; just preload
+                pass
+
+        asyncio.create_task(preload_session())
+
+        logger.info(f"✅ Cache refreshed: prod={len(df_prod)}, eff={len(df_eff)}, chat={len(df_chat)}")
+
+        return {
+            "status": "success",
+            "message": "AI cache refreshed and model preloaded",
+            "last_updated": AI_CACHE["last_updated"].isoformat(),
+            "production_rows": len(df_prod),
+            "efficiency_rows": len(df_eff),
+            "chatbot_rows": len(df_chat),
+            "summaries_used": summaries_for_model[:3],
+        }
+
+    except Exception as e:
+        logger.error(f"Cache refresh failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Cache refresh failed")
+
+@app.get("/api/ai/refresh_status")
+async def cache_status():
+    """
+    Get status of AI cache (last updated time, row counts, and AI feed status).
+    """
+    last_updated = AI_CACHE["last_updated"].isoformat() if AI_CACHE["last_updated"] else None
+    production_rows = len(AI_CACHE["production_data"]) if AI_CACHE["production_data"] is not None else 0
+    efficiency_rows = len(AI_CACHE["efficiency_data"]) if AI_CACHE["efficiency_data"] is not None else 0
+    chatbot_rows = len(AI_CACHE["chatbot_data"]) if AI_CACHE["chatbot_data"] is not None else 0
+
+    # ✅ Check if records were actually fed to AI (session exists)
+    fed_to_ai = bool(AI_CACHE.get("chatbot_session"))
+
+    return {
+        "last_updated": last_updated,
+        "production_rows": production_rows,
+        "efficiency_rows": efficiency_rows,
+        "chatbot_rows": chatbot_rows,
+        "fed_to_ai": fed_to_ai,
+        "chatbot_session": AI_CACHE.get("chatbot_session"),
+    }
+# Assume you already have rtms_engine, AI_CACHE, ollama_client set up
+logger = logging.getLogger("ai_api")
+router = APIRouter()
+
+# ================== REQUEST MODELS ==================
+class SummarizeRequest(BaseModel):
+    text: Optional[str] = None
+    length: str = "medium"
+
+class SuggestOpsRequest(BaseModel):
+    query: str
+    context: Optional[str] = None
+
+class CompletionRequest(BaseModel):
+    prompt: str
+    maxTokens: Optional[int] = 200
+
+class PredictEfficiencyRequest(BaseModel):
+    query: str   # user just sends query
+
+class UltraChatRequest(BaseModel):
+    query: str
+
+
+# ================== SUMMARIZE ==================
+@router.post("/api/ai/summarize")
+async def ai_summarize(request: SummarizeRequest):
+    try:
+        df = AI_CACHE.get("production_data")
+        context = ""
+
+        if df is not None and not df.empty:
+            lines = []
+            grouped = df.groupby("LineName").agg({"Eff100": "mean", "ProdnPcs": "sum"})
+            for ln, row in grouped.head(10).iterrows():
+                lines.append(f"Line {ln}: Target {int(row.Eff100)}, Produced {int(row.ProdnPcs)}")
+            context = "Recent production summary:\n" + "\n".join(lines)
+
+        prompt = request.text or f"Summarize garment production performance.\n\n{context}"
+
+        chunks = []
+        async for frag in ollama_client.generate_completion(
+            model="llama3.2:3b", prompt=prompt, stream=True
+        ):
+            chunks.append(frag)
+        summary = "".join(chunks)
+
+        return {"status": "success", "summary": summary}
+
+    except Exception as e:
+        logger.error(f"Summarization failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="AI summarization failed")
+
+
+# ================== SUGGEST OPS ==================
+@router.post("/api/ai/suggest_ops")
+async def ai_suggest_operations(request: SuggestOpsRequest):
+    try:
+        df = AI_CACHE.get("efficiency_data")
+        context = request.context or ""
+
+        if df is not None and not df.empty:
+            worst_lines = (
+                df.groupby("LineName")["EffPer"].mean().sort_values().head(3)
+            )
+            best_lines = (
+                df.groupby("LineName")["EffPer"].mean().sort_values(ascending=False).head(3)
+            )
+            context += "\nLow efficiency lines:\n" + "\n".join(
+                [f"{ln}: {val:.1f}%" for ln, val in worst_lines.items()]
+            )
+            context += "\nHigh efficiency lines:\n" + "\n".join(
+                [f"{ln}: {val:.1f}%" for ln, val in best_lines.items()]
+            )
+
+        base_prompt = f"User query: {request.query}\n\nContext:\n{context}"
+
+        chunks = []
+        async for frag in ollama_client.generate_completion(
+            model="llama3.2:3b", prompt=base_prompt, stream=True
+        ):
+            chunks.append(frag)
+        suggestions = "".join(chunks)
+
+        return {"status": "success", "suggestions": suggestions, "context_used": context}
+
+    except Exception as e:
+        logger.error(f"Suggest ops failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="AI operation suggestion failed")
+
+
+# ================== COMPLETION ==================
+@router.post("/api/ai/completion")
+async def ai_completion(request: CompletionRequest):
+    try:
+        df = AI_CACHE.get("production_data")
+        context = ""
+
+        if df is not None and not df.empty:
+            grouped = df.groupby("LineName").agg({"Eff100": "mean", "ProdnPcs": "sum"})
+            lines = [
+                f"Line {ln}: Target {int(row.Eff100)}, Produced {int(row.ProdnPcs)}"
+                for ln, row in grouped.head(10).iterrows()
+            ]
+            context = "Production efficiency analysis:\n" + "\n".join(lines)
+
+        prompt = request.prompt or context
+
+        chunks = []
+        async for frag in ollama_client.generate_completion(
+            model="llama3.2:3b", prompt=prompt, stream=True
+        ):
+            chunks.append(frag)
+        completion = "".join(chunks)
+
+        return {"status": "success", "text": completion, "prompt_used": prompt}
+
+    except Exception as e:
+        logger.error(f"Completion failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="AI completion failed")
+
+
+# ================== PREDICT EFFICIENCY ==================
+@router.post("/api/ai/predict_efficiency")
+async def predict_efficiency(request: PredictEfficiencyRequest):
+    try:
+        df = AI_CACHE.get("efficiency_data")
+        if df is None or df.empty:
+            return {"status": "no_data", "message": "Cache not ready"}
+
+        lines = []
+        for _, row in df.head(200).iterrows():
+            target, actual = int(row.Eff100 or 0), int(row.ProdnPcs or 0)
+            eff = (actual / target * 100) if target > 0 else 0
+            gap = target - actual
+            lines.append(
+                f"Line {row.LineName} (Style {row.StyleNo}) → "
+                f"Target {target}, Actual {actual}, Gap {gap}, Eff% {eff:.1f}"
+            )
+
+        context = "\n".join(lines)
+        prompt = f"User query: {request.query}\n\nPredict efficiency trends:\n{context}"
+
+        chunks = []
+        async for frag in ollama_client.generate_completion(
+            model="llama3.2:3b", prompt=prompt, stream=True
+        ):
+            chunks.append(frag)
+        ai_resp = "".join(chunks)
+
+        return {"status": "success", "ai_prediction_text": ai_resp, "rows_analyzed": len(df)}
+
+    except Exception as e:
+        logger.error(f"Prediction failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="AI prediction failed")
+
+
+# ================== ULTRA CHATBOT ==================
+@router.post("/api/ai/ultra_chatbot")
+async def ultra_advanced_ai_chatbot(request: UltraChatRequest):
+    try:
+        df = AI_CACHE.get("chatbot_data")
+        context = ""
+
+        if df is not None and not df.empty:
+            line_match = re.search(r"(S\d+-\d+)", request.query.upper())
+            if line_match:
+                line_name = line_match.group(1)
+                matches = df[df["LineName"].str.upper() == line_name]
+                if not matches.empty:
+                    prod_sum = int(matches["ProdnPcs"].sum())
+                    avg_eff = matches["EffPer"].mean()
+                    context = (
+                        f"Production Data:\n"
+                        f"Line {line_name} → Total Production {prod_sum} pcs, "
+                        f"Average Efficiency {avg_eff:.1f}%.\n"
+                    )
+            else:
+                top_lines = (
+                    df.groupby("LineName")["ProdnPcs"]
+                    .sum()
+                    .sort_values(ascending=False)
+                    .head(5)
+                )
+                context = "Recent top lines production:\n" + "\n".join(
+                    [f"{ln}: {pcs} pcs" for ln, pcs in top_lines.items()]
+                )
+
+        base_prompt = f"User query: {request.query}\n\n{context}"
+
+        async def response_stream():
+            yield '{"status":"success","answer":"'
+            async for frag in ollama_client.stream_chat(
+                model="llama3.2:3b",
+                messages=[{"role": "user", "content": base_prompt}],
+                options={"session": AI_CACHE.get("chatbot_session"), "persist": True},
+            ):
+                frag_esc = (
+                    frag.replace("\\", "\\\\")
+                        .replace('"', '\\"')
+                        .replace("\n", "\\n")
+                )
+                yield frag_esc
+            yield '"}'
+
+        return StreamingResponse(response_stream(), media_type="application/json")
+
+    except Exception as e:
+        logger.error(f"Ultra chatbot failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Chatbot error")
+
 
 if __name__ == "__main__":
     logger.info("🚀 Starting Fabric Pulse AI Backend...")

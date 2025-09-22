@@ -16,7 +16,8 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from config import config
-from ollama_client import ollama_client, SummarizeRequest, OperationSuggestion, AIRequest
+from ollama_client import ollama_client, AIRequest
+
 
 # Import the WhatsApp service instance
 from whatsapp_service import whatsapp_service
@@ -200,13 +201,13 @@ def get_router():
                 )
             
             # Create summarize request
-            summarize_req = SummarizeRequest(
-                text=full_text,
-                length=request.length
-            )
+            # summarize_req = SummarizeRequest(
+            #     text=full_text,
+            #     length=request.length
+            # )
             
             # Generate AI summary
-            summary = await ollama_client.summarize_text(summarize_req)
+            summary = await ollama_client.summarize_text()
             processing_time = time.time() - start_time
             
             logger.info(f"Flagged employee summarization completed in {processing_time:.2f}s")

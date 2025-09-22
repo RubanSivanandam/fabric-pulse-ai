@@ -7,17 +7,19 @@ Fabric Pulse AI - Unified Backend (Fixed)
 """
 
 import logging
+from ai_routes import router as ai_router
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 # Import config + routers
 from config import config
-from ai_routes import router as ai_router
 from fabric_pulse_ai_main import (
+    cache_status,
     generate_hourly_report,
     generate_pdf_report_api,
     predict_efficiency,
+    refresh_ai_cache,
     rtms_engine,
     ai_summarize,
     ai_suggest_operations,
@@ -72,6 +74,8 @@ app.post("/api/ai/summarize")(ai_summarize)
 app.post("/api/ai/suggest_ops")(ai_suggest_operations)
 app.post("/api/ai/completion")(ai_completion)
 app.post("/api/ai/predict_efficiency")(predict_efficiency)
+app.post("/api/ai/refresh_cache")(refresh_ai_cache)
+app.get("/api/ai/refresh_status")(cache_status)
 app.get("/api/status")(get_service_status)
 app.get("/api/rtms/filters/units")(get_unit_codes)
 app.get("/api/rtms/filters/floors")(get_floor_names)
