@@ -324,7 +324,7 @@ const ChatHeader = ({ onClose, onClear }) => {
         RTMS AI Assistant
       </Title>
 
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", color: "#6b7280" }}>
         {/* Clear */}
         <IconButton
           aria-label="Clear conversation"
@@ -411,6 +411,9 @@ const SuggestionChips = ({ suggestions, onSelect }) => {
             display: "inline-flex",
             gap: 8,
             alignItems: "center",
+            color: "#1f1b2e",
+            boxShadow: "0 4px 12px rgba(59,130,246,0.1)",
+            transition: "background 0.12s, box-shadow 0.12s", 
           }}
           aria-pressed="false"
         >
@@ -499,7 +502,7 @@ const RTMSBot = () => {
     const signal = abortRef.current.signal;
 
     try {
-      const res = await axios.post(url, body, { signal, timeout: 90000, ...config });
+      const res = await axios.post(url, body, { signal, timeout: 1000000, ...config });
       return res.data;
     } catch (err) {
       // axios v1+ uses `err.code === 'ERR_CANCELED'` when aborted with axios cancel token
@@ -578,7 +581,7 @@ const RTMSBot = () => {
         }
       } else {
         // Default to ultra_chat_bot if no endpoint chosen
-        data = await apiPost("/api/ai/ultra_chat_bot", { query: trimmed });
+        data = await apiPost("/api/ai/ultra_chatbot", { query: trimmed });
         const answer = data?.answer || data?.ai_prediction_text || JSON.stringify(data).slice(0, 3000);
         setMessages((prev) => prev.map((m) => (m.id === botPlaceholder.id ? { ...m, content: String(answer) } : m)));
       }
@@ -731,6 +734,7 @@ const RTMSBot = () => {
                     onKeyDown={handleKeyDown}
                     disabled={isLoading}
                     rows={1}
+                    style={{ color: "#1f1b2e" }}
                   />
                   <SendButton
                     type="submit"
