@@ -1,761 +1,493 @@
 """
-Enhanced WhatsApp Service for Professional Hourly Reports
-Replaces existing WhatsApp logic with professional PDF/CSV reporting
+Whatsapp service (refactored)
+Implements: hourly supervisor alerts for final-operation parts (ISFinOper='Y')
+Sends only when part-efficiency < threshold (default 85%).
+Keeps same public API used by fabric_pulse_ai_main.py:
+    - fetch_flagged_employees
+    - fetch_supervisors
+    - generate_and_send_reports(test_mode: bool = False)
 """
 
-from collections import defaultdict
-from email.mime import message
 import logging
-import asyncio
 import json
+import io
+import asyncio
+import time
 import schedule
 import threading
-import time
-import io
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
+from datetime import datetime
+from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 from pathlib import Path
 import pandas as pd
 
-# PDF Generation imports
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 
-from twilio.rest import Client
-from twilio.base.exceptions import TwilioException
-
 try:
-    from config import config
-except ImportError:
-    logging.error("Configuration module not found. Please ensure config.py exists.")
-    config = None
+    from twilio.rest import Client
+    from twilio.base.exceptions import TwilioException
+except Exception:
+    # Twilio optional for local testing
+    Client = None
+    TwilioException = Exception
+
+# local config
+from config import config
 
 logger = logging.getLogger(__name__)
 
-@dataclass
-class AlertMessage:
-    """Placeholder for legacy AlertMessage class"""
-    message: str
-    phone_number: str
-    # Add any other fields as needed
+# Default test numbers (the ones you requested mapped for demo)
+DEFAULT_TEST_NUMBERS = ["+919943625493", "+918939990949"]
 
 @dataclass
-class FlaggedEmployee:
-    """Data structure for flagged employees"""
-    emp_name: str
-    emp_code: str
+class SupervisorRow:
+    supervisor_name: str
+    phone_number: str
     unit_code: str
     floor_name: str
     line_name: str
-    style_no: str
     part_name: str
-    operation: str
-    new_oper_seq: str
-    production_pcs: int
+    prodn_pcs: int
     eff100: int
-    efficiency_per: float
-    is_red_flag: int
-
-@dataclass
-class LineReport:
-    """Report data structure for a line"""
-    line_name: str
-    unit_code: str
-    style_groups: Dict[str, List[FlaggedEmployee]]
-    total_flagged: int
+    eff_per: float
 
 class ProductionReadyWhatsAppService:
     """
-    Enhanced WhatsApp service for professional hourly reporting
-    Replaces the old alert-based system with structured reports
+    New WhatsApp service that:
+      - Fetches part-level aggregated production for final operations (ISFinOper='Y')
+      - Finds mapped supervisors for the part (via RTMS_SupervisorsDetl)
+      - Sends WhatsApp if efficiency < threshold (config.alerts.efficiency_threshold)
+      - test_mode forces sending to DEFAULT_TEST_NUMBERS (useful for Twilio sandbox)
     """
-    
+
     def __init__(self):
         self.config = config
         self.reports_dir = Path("reports")
         self.reports_dir.mkdir(exist_ok=True)
-        self.company_name = "Ambattur Clothing Company"
-        self.temporarily_disabled = False  # Enable for production use
-        
-        # Test numbers for development
-        self.test_numbers = ["+919943625493", "+918939990949"]
-        
-        # Scheduler state
-        self.scheduler_thread = None
-        self.is_running = False
-        self.last_report_time = None
-        
-        # Initialize Twilio client
-        if not self.temporarily_disabled and self.config and self._is_config_valid():
-            try:
-                self.client = Client(self.config.account_sid, self.config.auth_token)
-                logger.info("✅ Enhanced WhatsApp service initialized successfully")
-                self._test_connection()
-            except Exception as e:
-                logger.error(f"❌ Failed to initialize Twilio client: {e}")
-                self.client = None
-        else:
-            self.client = None
-            logger.info("🚫 WhatsApp service initialized in test mode")
-    
-    def _is_config_valid(self) -> bool:
-        """Check if required Twilio configuration attributes are present"""
-        if not self.config:
-            return False
-        required_attrs = ['account_sid', 'auth_token', 'whatsapp_number']
-        return all(hasattr(self.config, attr) and getattr(self.config, attr) for attr in required_attrs)
-    
-    def _test_connection(self):
-        """Test Twilio connection"""
-        if self.temporarily_disabled or not self.client:
-            logger.info("🚫 Twilio connection test skipped - service disabled or client unavailable")
-            return
-        
+        self.mock_dir = self.reports_dir / "mock_messages"
+        self.mock_dir.mkdir(exist_ok=True)
+        self.temporarily_disabled = False  # set True to never call Twilio
+        self.test_numbers = DEFAULT_TEST_NUMBERS.copy()
+        self.threshold = float(getattr(self.config.alerts, "efficiency_threshold", 85.0))
+        # Twilio client initialization using config.twilio
+        self.twilio_client = None
         try:
-            account = self.client.api.accounts(self.config.account_sid).fetch()
-            logger.info(f"✅ Twilio connection test successful. Account: {account.friendly_name}")
-        except TwilioException as e:
-            logger.error(f"❌ Twilio connection test failed: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"❌ Unexpected error in connection test: {e}")
-            raise
-    
-    async def fetch_flagged_employees(self) -> List[FlaggedEmployee]:
-        """Fetch employees with IsRedFlag = 1"""
-        try:
-            # Import here to avoid circular imports
-            from fabric_pulse_ai_main import rtms_engine
-            
-            if not rtms_engine or not rtms_engine.engine:
-                logger.error("❌ Database engine not available")
-                return []
-            
-            query = """
-            SELECT 
-                EmpName, EmpCode, UnitCode, FloorName, LineName, StyleNo,
-                PartName, Operation, NewOperSeq, ProdnPcs, Eff100, EffPer, IsRedFlag
-            FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
-            WHERE CAST(TranDate AS DATE) = CAST(GETDATE() AS DATE)
-                AND IsRedFlag = 1
-                AND EmpName IS NOT NULL
-                AND LineName IS NOT NULL
-            ORDER BY LineName, StyleNo, EmpName
-            """
-            
-            with rtms_engine.engine.connect() as connection:
-                df = pd.read_sql(query, connection)
-            
-            flagged_employees = []
-            for _, row in df.iterrows():
-                employee = FlaggedEmployee(
-                    emp_name=str(row['EmpName']) if row['EmpName'] else "Unknown",
-                    emp_code=str(row['EmpCode']) if row['EmpCode'] else "Unknown",
-                    unit_code=str(row['UnitCode']) if row['UnitCode'] else "Unknown",
-                    floor_name=str(row['FloorName']) if row['FloorName'] else "Unknown",
-                    line_name=str(row['LineName']) if row['LineName'] else "Unknown",
-                    style_no=str(row['StyleNo']) if row['StyleNo'] else "Unknown",
-                    part_name=str(row['PartName']) if row['PartName'] else "Unknown",
-                    operation=str(row['Operation']) if row['Operation'] else "Unknown",
-                    new_oper_seq=str(row['NewOperSeq']) if row['NewOperSeq'] else "Unknown",
-                    production_pcs=int(row['ProdnPcs']) if pd.notnull(row['ProdnPcs']) else 0,
-                    eff100=int(row['Eff100']) if pd.notnull(row['Eff100']) else 0,
-                    efficiency_per=float(row['EffPer']) if pd.notnull(row['EffPer']) else 0.0,
-                    is_red_flag=int(row['IsRedFlag']) if pd.notnull(row['IsRedFlag']) else 0
-                )
-                flagged_employees.append(employee)
-            
-            logger.info(f"📊 Fetched {len(flagged_employees)} flagged employees")
-            return flagged_employees
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to fetch flagged employees: {e}")
-            return []
-    
-    def group_employees_by_line_and_style(self, employees: List[FlaggedEmployee]) -> Dict[str, LineReport]:
-        """Group employees by line and then by style"""
-        line_reports = {}
-        
-        for emp in employees:
-            line_key = f"{emp.unit_code}_{emp.line_name}"
-            
-            if line_key not in line_reports:
-                line_reports[line_key] = LineReport(
-                    line_name=emp.line_name,
-                    unit_code=emp.unit_code,
-                    style_groups={},
-                    total_flagged=0
-                )
-            
-            line_report = line_reports[line_key]
-            
-            if emp.style_no not in line_report.style_groups:
-                line_report.style_groups[emp.style_no] = []
-            
-            line_report.style_groups[emp.style_no].append(emp)
-            line_report.total_flagged += 1
-        
-        return line_reports
-    
-    def generate_pdf_report(self, line_reports: Dict[str, LineReport], timestamp: datetime) -> bytes:
-        """Generate professional branded PDF report"""
-        buffer = io.BytesIO()
-        try:
-            doc = SimpleDocTemplate(
-                buffer, 
-                pagesize=A4, 
-                topMargin=0.5*inch,
-                bottomMargin=0.5*inch,
-                leftMargin=0.5*inch,
-                rightMargin=0.5*inch
-            )
-            styles = getSampleStyleSheet()
-            story = []
-
-            # Normal style for wrapping inside table cells
-            cell_style = styles["Normal"]
-            cell_style.fontSize = 8
-            cell_style.leading = 10  # line height
-
-            # Custom styles for professional branding
-            title_style = ParagraphStyle(
-                'CustomTitle',
-                parent=styles['Heading1'],
-                fontSize=20,
-                spaceAfter=10,
-                alignment=1,
-                textColor=colors.darkblue,
-                fontName='Helvetica-Bold'
-            )
-            subtitle_style = ParagraphStyle(
-                'CustomSubtitle',
-                parent=styles['Heading2'],
-                fontSize=14,
-                spaceAfter=20,
-                alignment=1,
-                textColor=colors.darkblue,
-                fontName='Helvetica-Bold'
-            )
-            timestamp_style = ParagraphStyle(
-                'TimestampStyle',
-                parent=styles['Normal'],
-                fontSize=12,
-                alignment=1,
-                textColor=colors.darkgrey
-            )
-
-            # HEADER Section
-            story.append(Paragraph(self.company_name, title_style))
-            story.append(Paragraph("Hourly Production Report", subtitle_style))
-            story.append(Paragraph(f"Generated at: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}", timestamp_style))
-            story.append(Spacer(1, 30))
-
-            if not line_reports:
-                # No flagged employees
-                no_issues_style = ParagraphStyle(
-                    'NoIssuesStyle',
-                    parent=styles['Normal'],
-                    fontSize=14,
-                    alignment=1,
-                    textColor=colors.darkgreen,
-                    spaceAfter=20
-                )
-                story.append(Paragraph("🎉 Excellent News! No flagged employees found for this hour.", no_issues_style))
-                story.append(Paragraph("All production lines are performing above target efficiency.", no_issues_style))
+            if Client and self.config and hasattr(self.config, "twilio") and self.config.twilio.is_configured():
+                self.twilio_client = Client(self.config.twilio.account_sid, self.config.twilio.auth_token)
+                logger.info("Twilio client initialized")
             else:
-                line_header_style = ParagraphStyle(
-                    'LineHeaderStyle',
-                    parent=styles['Heading2'],
-                    fontSize=16,
-                    textColor=colors.darkblue,
-                    spaceAfter=10,
-                    fontName='Helvetica-Bold'
-                )
-                style_header_style = ParagraphStyle(
-                    'StyleHeaderStyle',
-                    parent=styles['Heading3'],
-                    fontSize=12,
-                    textColor=colors.darkred,
-                    spaceAfter=8,
-                    fontName='Helvetica-Bold'
-                )
+                logger.info("Twilio not configured or client not available - using mock send")
+        except Exception as e:
+            logger.warning(f"Failed to init Twilio client: {e}")
+            self.twilio_client = None
+    def start_hourly_scheduler(self):
+        """Start background scheduler to send hourly reports"""
+        def job():
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(self.generate_and_send_reports(test_mode=False))
+            except Exception as e:
+                logger.error(f"Scheduler job failed: {e}")
 
-                for line_key, line_report in line_reports.items():
-                    # Line header
-                    line_title = f"Line: {line_report.line_name} (Unit: {line_report.unit_code})"
-                    story.append(Paragraph(line_title, line_header_style))
-                    story.append(Spacer(1, 10))
+        schedule.every().hour.at(":00").do(job)
 
-                    # Style groups within line
-                    for style_no, employees in line_report.style_groups.items():
-                        style_title = f"Style Number: {style_no}"
-                        story.append(Paragraph(style_title, style_header_style))
+        def run_schedule():
+            while True:
+                schedule.run_pending()
+                time.sleep(30)
 
-                        # Table data
-                        table_data = [
-                            ['Employee Name', 'Location (Unit → Floor → Line)', 'Part Name', 'Operation', 'Production (pcs)', 'Efficiency %']
-                        ]
+        t = threading.Thread(target=run_schedule, daemon=True)
+        t.start()
+        logger.info("✅ WhatsApp hourly scheduler started")
 
-                        for emp in employees:
-                            location = f"{emp.unit_code} → {emp.floor_name} → {emp.line_name}"
-                            production = f"{emp.production_pcs} / {emp.eff100}"
-
-                            table_data.append([
-                                Paragraph(emp.emp_name, cell_style),
-                                Paragraph(location, cell_style),
-                                Paragraph(emp.part_name, cell_style),
-                                Paragraph(emp.operation, cell_style),
-                                Paragraph(production, cell_style),
-                                Paragraph(f"{emp.efficiency_per:.1f}%", cell_style),
-                            ])
-
-                        # Wider columns for part & operation to avoid overlap
-                        col_widths = [1.2*inch, 1.8*inch, 2.0*inch, 2.0*inch, 1.2*inch, 0.8*inch]
-                        table = Table(table_data, colWidths=col_widths)
-
-                        table.setStyle(TableStyle([
-                            ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
-                            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-                            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                            ('FONTSIZE', (0, 0), (-1, 0), 9),
-                            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                            ('TOPPADDING', (0, 0), (-1, 0), 8),
-                            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                            ('ALIGN', (0, 1), (-1, -1), 'CENTER'),
-                            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                            ('FONTSIZE', (0, 1), (-1, -1), 8),
-                            ('TOPPADDING', (0, 1), (-1, -1), 6),
-                            ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
-                            ('ALIGN', (4, 1), (5, -1), 'RIGHT'),
-                            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
-                            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                        ]))
-
-                        story.append(table)
-                        story.append(Spacer(1, 20))
-
-                    story.append(Spacer(1, 15))
-
-            # FOOTER Section
-            story.append(Spacer(1, 30))
-            footer_motivational_style = ParagraphStyle(
-                'FooterMotivationalStyle',
-                parent=styles['Normal'],
-                fontSize=11,
-                textColor=colors.darkgreen,
-                alignment=1,
-                spaceAfter=15,
-                fontName='Helvetica-Bold'
-            )
-            footer_disclaimer_style = ParagraphStyle(
-                'FooterDisclaimerStyle',
-                parent=styles['Normal'],
-                fontSize=9,
-                textColor=colors.darkgrey,
-                alignment=1,
-                spaceAfter=10
-            )
-            story.append(Paragraph(
-                "Some team members are performing slightly below target this hour. With guidance and encouragement, the team can improve and achieve higher productivity 🚀", 
-                footer_motivational_style
-            ))
-            story.append(Paragraph(
-                "This report is intended only for Ambattur Clothing Company supervisors.",
-                footer_disclaimer_style
-            ))
-
-            # Build PDF
-            doc.build(story)
-            return buffer.getvalue()
-
-        finally:
-            buffer.close()
-
-    def generate_csv_report(self, line_reports: Dict[str, LineReport], timestamp: datetime) -> Optional[str]:
-        """Generate CSV report as alternative format"""
+    # --------------------
+    # DB fetch helpers
+    # --------------------
+    async def fetch_flagged_employees(self) -> List[Dict[str, Any]]:
+        """
+        Legacy helper kept for compatibility: fetch rows where IsRedFlag=1.
+        Not required by the main flow but kept because other modules may call it.
+        """
         try:
-            csv_data = []
-            
-            for line_key, line_report in line_reports.items():
-                for style_no, employees in line_report.style_groups.items():
-                    for emp in employees:
-                        csv_data.append({
-                            'Employee Name': emp.emp_name,
-                            'Employee Code': emp.emp_code,
-                            'Unit Code': emp.unit_code,
-                            'Floor Name': emp.floor_name,
-                            'Line Name': emp.line_name,
-                            'Style No': emp.style_no,
-                            'Part Name': emp.part_name,
-                            'Operation': emp.new_oper_seq,
-                            'Production Pcs': emp.production_pcs,
-                            'Target (Eff100)': emp.eff100,
-                            'Efficiency %': f"{emp.efficiency_per:.1f}%",
-                            'Report Time': timestamp.strftime('%Y-%m-%d %H:%M:%S')
-                        })
-            
-            if csv_data:
-                df = pd.DataFrame(csv_data)
-                csv_filename = f"flagged_employees_{timestamp.strftime('%Y%m%d_%H%M')}.csv"
-                csv_path = self.reports_dir / csv_filename
+            from fabric_pulse_ai_main import rtms_engine
+            if not rtms_engine or not rtms_engine.engine:
+                logger.error("Database engine not available")
+                return []
+            query = """
+                SELECT EmpName, EmpCode, UnitCode, FloorName, LineName, StyleNo,
+                       PartName, Operation, NewOperSeq, ProdnPcs, Eff100, EffPer, IsRedFlag
+                FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
+                WHERE CAST(TranDate AS DATE) = CAST(GETDATE() AS DATE)
+                  AND IsRedFlag = 1
+                  AND EmpName IS NOT NULL
+                  AND LineName IS NOT NULL
+                ORDER BY LineName, StyleNo, EmpName
+            """
+            with rtms_engine.engine.connect() as conn:
+                df = pd.read_sql(query, conn)
+            return df.to_dict(orient="records")
+        except Exception as e:
+            logger.error(f"fetch_flagged_employees failed: {e}")
+            return []
+
+    async def fetch_supervisors(self) -> Dict[str, List[str]]:
+        """
+        Fetch supervisors and phone numbers from RTMS_SupervisorsDetl (or Supv det table).
+        Returns dict keyed by (UnitCode, FloorName, LineName, PartName) -> list of phone numbers.
+        """
+        try:
+            from fabric_pulse_ai_main import rtms_engine
+            if not rtms_engine or not rtms_engine.engine:
+                logger.error("Database engine not available for supervisors")
+                return {}
+            # Try table name used in your code; adjust if your DB uses different name
+            query = """
+                SELECT UnitCode, FloorName, LineName, PartName, SupervisorName, PhoneNumber
+                FROM [ITR_PRO_IND].[dbo].[RTMS_SupervisorsDetl]
+                WHERE PhoneNumber IS NOT NULL AND PhoneNumber != ''
+            """
+            with rtms_engine.engine.connect() as conn:
+                df = pd.read_sql(query, conn)
+            supervisors = {}
+            for _, r in df.iterrows():
+                unit = str(r.get("UnitCode") or "").strip()
+                floor = str(r.get("FloorName") or "").strip()
+                line = str(r.get("LineName") or "").strip()
+                part = str(r.get("PartName") or "").strip()
+                phone = str(r.get("PhoneNumber") or "").strip()
+                supname = str(r.get("SupervisorName") or "").strip()
+                if not phone:
+                    continue
+                # Normalize phone: keep if leading + else assume Indian +91
+                if not phone.startswith("+"):
+                    phone = f"+91{phone}"
+                key = (unit, floor, line, part)
+                supervisors.setdefault(key, []).append({"phone": phone, "name": supname})
+            logger.info(f"Fetched supervisors for {len(supervisors)} part mappings")
+            return supervisors
+        except Exception as e:
+            logger.error(f"fetch_supervisors failed: {e}")
+            return {}
+
+    # --------------------
+    # Core production fetch and aggregation
+    # --------------------
+    async def _query_part_efficiencies(self,
+                                       unit_code: Optional[str] = None,
+                                       floor_name: Optional[str] = None,
+                                       line_name: Optional[str] = None,
+                                       part_name: Optional[str] = None,
+                                       isFinOper: str = "Y"
+                                       ) -> List[SupervisorRow]:
+        """
+        Query DB to aggregate production per Unit->Floor->Line->Part (final operation rows only)
+        Joins to Supervisors table is done later in Python so we can map multiple supervisors.
+        Returns list of SupervisorRow-like records (without supervisor info).
+        """
+        try:
+                from fabric_pulse_ai_main import rtms_engine
+                if not rtms_engine or not rtms_engine.engine:
+                    logger.error("Database engine not available for production query")
+                    return []
+
+                # Base query
+                query = """
+                    SELECT
+                        A.UnitCode,
+                        A.FloorName,
+                        A.LineName,
+                        A.PartName,
+                        SUM(ISNULL(A.ProdnPcs, 0)) AS ProdnPcs,
+                        SUM(ISNULL(A.Eff100, 0)) AS Eff100
+                    FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction] A
+                    WHERE CAST(A.TranDate AS DATE) = CAST(GETDATE() AS DATE)
+                    AND A.ISFinOper = 'Y'
+                """
+
+                params: dict = {}
+
+                # Apply optional filters dynamically
+                if unit_code:
+                    query += " AND A.UnitCode = :unit_code"
+                    params["unit_code"] = unit_code
+                if floor_name:
+                    query += " AND A.FloorName = :floor_name"
+                    params["floor_name"] = floor_name
+                if line_name:
+                    query += " AND A.LineName = :line_name"
+                    params["line_name"] = line_name
+                if part_name:
+                    query += " AND A.PartName = :part_name"
+                    params["part_name"] = part_name
+
+                # Add GROUP BY and ORDER BY
+                query += """
+                    GROUP BY A.UnitCode, A.FloorName, A.LineName, A.PartName
+                    ORDER BY A.UnitCode, A.FloorName, A.LineName, A.PartName
+                """
+
+                from sqlalchemy import text
+                with rtms_engine.engine.connect() as conn:
+                    df = pd.read_sql(text(query), conn, params=params)
+
+                rows: List[SupervisorRow] = []
+                for _, r in df.iterrows():
+                    eff100 = int(r["Eff100"]) if pd.notnull(r["Eff100"]) else 0
+                    prodn = int(r["ProdnPcs"]) if pd.notnull(r["ProdnPcs"]) else 0
+                    eff = (prodn * 100.0 / eff100) if eff100 > 0 else 0.0
+
+                    rows.append(
+                        SupervisorRow(
+                            supervisor_name="",
+                            phone_number="",
+                            unit_code=str(r["UnitCode"] or ""),
+                            floor_name=str(r["FloorName"] or ""),
+                            line_name=str(r["LineName"] or ""),
+                            part_name=str(r["PartName"] or ""),
+                            prodn_pcs=prodn,
+                            eff100=eff100,
+                            eff_per=round(eff, 2),
+                        )
+                    )
+
+                logger.info(f"Aggregated {len(rows)} part-level rows (ISFinOper='Y')")
+                return rows
+
+        except Exception as e:
+                logger.error(f"_query_part_efficiencies failed: {e}", exc_info=True)
+                return []
+
+
+    # --------------------
+    # Message creation and send
+    # --------------------
+    def _format_supervisor_message(self, sup_name: str, unit: str, floor: str, line: str, part: str, prodn: int, eff100: int, eff_per: float) -> str:
+        """Custom enhanced template"""
+        header = f"{sup_name} ({unit} → {floor} → {line} → Part: {part})\n\n"
+        body = (
+            f"For this session, your part *{part}* on line *{line}* produced *{prodn}* pcs "
+            f"against the target *{eff100}* pcs.\n\n"
+            f"*Efficiency*: {eff_per:.1f}%.\n\n"
+            "Please encourage the team and try to achieve the target. "
+            "If you need support, consider quick operator coaching, workstation checks, or a short line-balancing intervention. "
+            "Every small improvement helps — thank you for leading the team! 💪"
+        )
+        footer = "\n\n— RTMS Bot"
+        return header + body + footer
+
+    async def send_whatsapp_report(self, phone_number: str, message: str, pdf_path: Optional[str] = None, csv_path: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Sends WhatsApp message + (optionally) attachments.
+        If Twilio isn't configured (or temporarily_disabled=True) it will write a mock JSON file.
+        Returns dict with status and details.
+        """
+        try:
+            # Normalize phone
+            if not phone_number.startswith("+"):
+                phone_number = f"+91{phone_number}"
+
+            if self.temporarily_disabled or self.twilio_client is None or not (hasattr(self.config, "twilio") and self.config.twilio.is_configured()):
+                # mock send -> store in mock_dir
+                payload = {
+                    "to": phone_number,
+                    "body": message,
+                    "pdf": pdf_path,
+                    "csv": csv_path,
+                    "sent_at": datetime.now().isoformat()
+                }
+                mock_file = self.mock_dir / f"mock_{phone_number.replace('+','')}_{int(time.time())}.json"
+                with open(mock_file, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, indent=2, ensure_ascii=False)
+                logger.info(f"[MOCK SEND] logged to {mock_file}")
+                return {"status": "mocked", "file": str(mock_file)}
+            else:
+                # real Twilio send
+                from_whatsapp = self.config.twilio.whatsapp_number if hasattr(self.config, "twilio") else None
+                if not from_whatsapp:
+                    logger.error("Twilio FROM (whatsapp number) not configured")
+                    return {"status": "error", "reason": "twilio_from_not_configured"}
+
+                # Build message body
+                to_addr = f"whatsapp:{phone_number}"
+                from_addr = from_whatsapp if from_whatsapp.startswith("whatsapp:") else f"whatsapp:{from_whatsapp}"
+
+                # Twilio message create (no media attachment for sandbox; could enable media_url when available)
+                msg = self.twilio_client.messages.create(
+                    body=message,
+                    from_=from_addr,
+                    to=to_addr,
+                )
+                logger.info(f"WhatsApp sent SID={getattr(msg, 'sid', None)} to {phone_number}")
+                return {"status": "sent", "sid": getattr(msg, "sid", None)}
+        except TwilioException as te:
+            logger.error(f"TwilioException sending to {phone_number}: {te}")
+            return {"status": "error", "reason": str(te)}
+        except Exception as e:
+            logger.error(f"send_whatsapp_report failed: {e}", exc_info=True)
+            return {"status": "error", "reason": str(e)}
+
+    # --------------------
+    # Report generation helpers (PDF/CSV)
+    # --------------------
+    def generate_pdf_report(self, line_data: List[SupervisorRow], timestamp: datetime) -> bytes:
+        """Simple PDF summarizing rows (kept lightweight)"""
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4)
+        styles = getSampleStyleSheet()
+        story = []
+
+        title = Paragraph("Hourly Production - Part Summary", styles["Heading2"])
+        story.append(title)
+        story.append(Spacer(1, 8))
+
+        table_data = [["Unit", "Floor", "Line", "Part", "Produced", "Target", "Eff%"]]
+        for r in line_data:
+            table_data.append([r.unit_code, r.floor_name, r.line_name, r.part_name, str(r.prodn_pcs), str(r.eff100), f"{r.eff_per:.1f}%"])
+        table = Table(table_data, colWidths=[60, 60, 60, 120, 60, 60, 50])
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2D6A9F")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ]))
+        story.append(table)
+        doc.build(story)
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
+        return pdf_bytes
+
+    def generate_csv_report(self, line_data: List[SupervisorRow], timestamp: datetime) -> Optional[str]:
+        """Generate CSV and return path"""
+        try:
+            csv_path = self.reports_dir / f"hourly_parts_{timestamp.strftime('%Y%m%d_%H%M')}.csv"
+            rows = []
+            for r in line_data:
+                rows.append({
+                    "Unit": r.unit_code,
+                    "Floor": r.floor_name,
+                    "Line": r.line_name,
+                    "Part": r.part_name,
+                    "Produced": r.prodn_pcs,
+                    "Target": r.eff100,
+                    "Eff%": f"{r.eff_per:.1f}"
+                })
+            if rows:
+                df = pd.DataFrame(rows)
                 df.to_csv(csv_path, index=False)
                 return str(csv_path)
-            
             return None
-            
         except Exception as e:
-            logger.error(f"❌ Failed to generate CSV report: {e}")
+            logger.error(f"generate_csv_report failed: {e}")
             return None
-    
-    async def generate_motivational_message(self, line_reports: Dict[str, LineReport]) -> str:
-        """Generate AI-powered motivational WhatsApp message"""
-        try:
-            if not line_reports:
-                return """🎉 Excellent news! All production lines are performing above target efficiency this hour. 
 
-The team's dedication and hard work are clearly paying off. Keep up the outstanding performance! 🚀
-
-No action needed - continue with current operations."""
-            
-            total_flagged = sum(report.total_flagged for report in line_reports.values())
-            line_count = len(line_reports)
-            
-            messages = [
-                f"Hello Supervisor! 📊\n\nPlease find the attached hourly production report for your line(s).\n\n{total_flagged} team members across {line_count} lines are performing slightly below target this hour, but with a little encouragement and guidance, the team can quickly catch up and exceed expectations! 🚀\n\nYour leadership makes all the difference in helping the team reach their full potential.",
-                
-                f"Good day Supervisor! 📈\n\nAttached is the hourly report showing {total_flagged} employees across {line_count} production lines needing some support.\n\nThis is a great opportunity to provide coaching and motivation. With your guidance, these team members can bounce back and achieve excellent results! 💪\n\nTogether we can turn this around and make it a successful hour ahead!",
-                
-                f"Dear Supervisor 👋\n\nHourly performance report attached for your review. {total_flagged} employees across {line_count} lines are slightly below target.\n\nEvery challenge is an opportunity for improvement! Your supportive leadership can help these team members regain their momentum and excel. 🌟\n\nLet's work together to bring out the best in our team!"
-            ]
-            
-            message_index = datetime.now().hour % len(messages)
-            return messages[message_index]
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to generate motivational message: {e}")
-            return "Please find the attached hourly production report. The team can improve with your guidance! 🚀"
-
-    async def send_whatsapp_report(self, phone_number: str, message: str, csv_path: str, pdf_path: str):
-        """Mock WhatsApp send in local mode"""
-        if self.temporarily_disabled or self.client is None:
-            # Local mock instead of Twilio send
-            log_data = {
-                "to": phone_number,
-                "from": self.config.whatsapp_number if self.config else None,
-                "body": message,
-                "csv_file": str(csv_path),
-                "pdf_file": str(pdf_path)
-            }
-            # Save to a log file
-            Path("reports/mock_messages").mkdir(exist_ok=True)
-            mock_file = Path("reports/mock_messages") / f"mock_{phone_number.replace('+','')}.json"
-            with open(mock_file, "w", encoding="utf-8") as f:
-                json.dump(log_data, f, indent=2)
-
-            logger.info(f"[MOCK MODE] WhatsApp message logged to {mock_file}")
-            return {"status": "mocked", "file": str(mock_file)}
-
-        # --- real Twilio send (kept intact) ---
-        message_obj = self.client.messages.create(
-            from_=self.config.whatsapp_number,
-            to=f"whatsapp:{phone_number}",
-            body=message
-            # media_url=[...]   # disabled for local
-        )
-        return message_obj.sid
-    # Add this method to the ProductionReadyWhatsAppService class
-# Add this method to the ProductionReadyWhatsAppService class
-async def fetch_supervisors(self) -> Dict[str, List[str]]:
-    """Fetch supervisors and their phone numbers from database"""
-    try:
-        from fabric_pulse_ai_main import rtms_engine
-        
-        if not rtms_engine or not rtms_engine.engine:
-            logger.error("❌ Database engine not available for supervisors")
-            return {}
-        
-        query = """
-        SELECT LineName, PhoneNumber 
-        FROM [ITR_PRO_IND].[dbo].[RTMS_SupervisorsDet1]
-        WHERE PhoneNumber IS NOT NULL AND PhoneNumber != ''
-        """
-        
-        with rtms_engine.engine.connect() as connection:
-            df = pd.read_sql(query, connection)
-        
-        # Group phone numbers by line
-        supervisors = {}
-        for _, row in df.iterrows():
-            line = row['LineName']
-            phone = row['PhoneNumber']
-            
-            # Format phone number to E.164 format if needed
-            if not phone.startswith('+'):
-                phone = f"+91{phone}"  # Assuming Indian numbers
-            
-            if line not in supervisors:
-                supervisors[line] = []
-            supervisors[line].append(phone)
-        
-        logger.info(f"📋 Fetched supervisors for {len(supervisors)} lines")
-        return supervisors
-        
-    except Exception as e:
-        logger.error(f"❌ Failed to fetch supervisors: {e}")
-        return {}
-
-# Modify the generate_and_send_reports method to use supervisors
-async def generate_and_send_reports(self, test_mode: bool = False) -> Dict[str, Any]:
-    """Generate and send hourly reports to supervisors"""
-    timestamp = datetime.now()
-    logger.info(f"🕐 Starting report generation at {timestamp}")
-    
-    try:
-        # Fetch flagged employees and supervisors
-        flagged_employees = await self.fetch_flagged_employees()
-        supervisors = await self.fetch_supervisors()
-        
-        # Group by line and style
-        line_reports = self.group_employees_by_line_and_style(flagged_employees)
-        
-        # Determine recipients
-        if test_mode:
-            recipients = self.test_numbers
-        else:
-            # Get unique phone numbers for lines with flagged employees
-            recipients = set()
-            for line_key in line_reports.keys():
-                line_name = line_key.split('_')[1]  # Extract line name from key
-                if line_name in supervisors:
-                    recipients.update(supervisors[line_name])
-            
-            # Fallback to test numbers if no supervisors found
-            if not recipients:
-                recipients = self.test_numbers
-                logger.warning("⚠️ No supervisors found, using test numbers")
-    except Exception as e:
-        logger.error(f"❌ Failed to fetch supervisors: {e}")
-        return {}
-        
-        # Rest of the method remains the same...
-        # [Keep the existing code for PDF generation, message creation, etc.]
-
-    
-    # async def send_whatsapp_report(self, pdf_path: Path, message: str, phone_number: str) -> bool:
-    #     """Send WhatsApp report with PDF attachment"""
-    #     try:
-    #         if self.temporarily_disabled or not self.client:
-    #             logger.info(f"📱 [TEST MODE] Would send WhatsApp report to {phone_number}")
-    #             logger.info(f"📄 PDF: {pdf_path}")
-    #             logger.info(f"💬 Message: {message}")
-    #             return True
-            
-    #         message_obj = self.client.messages.create(
-    #             from_=self.config.whatsapp_number,
-    #             body=message,
-    #             to=f"whatsapp:{phone_number}",
-    #             # media_url=[str(pdf_path)]  # Uncomment for file attachment
-    #         )
-            
-    #         logger.info(f"✅ WhatsApp report sent successfully! Message SID: {message_obj.sid}")
-    #         logger.info(f"📱 Sent to: {phone_number}")
-    #         return True
-            
-        # except TwilioException as e:
-        #     logger.error(f"❌ Twilio error sending report: {e}")
-        #     return False
-        # except Exception as e:
-        #     logger.error(f"❌ Failed to send WhatsApp report: {e}")
-        #     return False
-    
+    # --------------------
+    # MAIN: generate_and_send_reports (keep same name/signature)
+    # --------------------
     async def generate_and_send_reports(self, test_mode: bool = False) -> Dict[str, Any]:
-        """Generate and send hourly reports to supervisors"""
+        """
+        Main method called by API:
+          - test_mode True -> sends to DEFAULT_TEST_NUMBERS (for Twilio sandbox / demo)
+          - test_mode False -> attempts to send to mapped supervisors (but falls back to test numbers if none)
+        """
         timestamp = datetime.now()
-        logger.info(f"🕐 Starting report generation at {timestamp}")
-        
         try:
-            # Fetch flagged employees
-            flagged_employees = await self.fetch_flagged_employees()
-            
-            # Group by line and style
-            line_reports = self.group_employees_by_line_and_style(flagged_employees)
-            
-            # Skip if no flagged employees and not test mode
-            if not line_reports and not test_mode:
-                logger.info("🎉 No flagged employees found - skipping report generation")
-                return {
-                    "status": "success",
-                    "message": "No flagged employees found - no report generated",
-                    "flagged_count": 0,
-                    "lines_affected": 0,
-                    "timestamp": timestamp.isoformat()
-                }
-            
-            # Generate PDF report
-            pdf_bytes = self.generate_pdf_report(line_reports, timestamp)
-            
-            # Save PDF file
-            pdf_filename = f"{'test_' if test_mode else ''}hourly_report_{timestamp.strftime('%Y%m%d_%H%M')}.pdf"
-            pdf_path = self.reports_dir / pdf_filename
-            
-            with open(pdf_path, 'wb') as f:
+            # 1) Fetch aggregated final-operation part records
+            part_rows = await self._query_part_efficiencies(isFinOper="Y")
+
+            if not part_rows:
+                logger.info("No final-operation part rows for today")
+                return {"status": "success", "message": "No final-operation production rows found", "timestamp": timestamp.isoformat()}
+
+            # 2) Fetch supervisors mapping
+            supervisors_map = await self.fetch_supervisors()
+
+            # 3) Build recipients list per aggregated part
+            deliveries = []
+            for r in part_rows:
+                key = (r.unit_code, r.floor_name, r.line_name, r.part_name)
+                eff_per = r.eff_per
+
+                # If efficiency >= threshold, skip sending
+                if eff_per >= self.threshold:
+                    logger.debug(f"Skipping part {key} as efficiency {eff_per:.1f}% >= threshold {self.threshold}")
+                    continue
+
+                # Find supervisors mapped to this key
+                sup_entries = supervisors_map.get(key, [])
+                if not sup_entries and test_mode:
+                    # in test_mode, still notify test numbers
+                    for t in self.test_numbers:
+                        deliveries.append({"phone": t, "name": "TEST_SUPERVISOR", "part_row": r})
+                elif not sup_entries and not test_mode:
+                    # fallback: no supervisors for this part -> skip or optionally send to configured alert number
+                    fallback = getattr(self.config.twilio, "alert_phone_number", None) if hasattr(self.config, "twilio") else None
+                    if fallback:
+                        deliveries.append({"phone": fallback.replace("whatsapp:", "").replace(" ", ""), "name": "FALLBACK", "part_row": r})
+                    else:
+                        logger.warning(f"No supervisors mapped for {key}; skipping (no fallback configured)")
+                else:
+                    for s in sup_entries:
+                        deliveries.append({"phone": s["phone"], "name": s.get("name") or "Supervisor", "part_row": r})
+
+            if not deliveries:
+                logger.info("No deliveries (all parts >= threshold or no supervisors found).")
+                return {"status": "success", "message": "No alerts to send (all parts ok or no supervisors found)", "timestamp": timestamp.isoformat()}
+
+            # 4) Build a PDF + CSV summary to attach (mock/log) once per run
+            pdf_bytes = self.generate_pdf_report(part_rows, timestamp)
+            pdf_path = self.reports_dir / f"hourly_report_{timestamp.strftime('%Y%m%d_%H%M')}.pdf"
+            with open(pdf_path, "wb") as f:
                 f.write(pdf_bytes)
-            
-            # Generate CSV as backup
-            csv_path = self.generate_csv_report(line_reports, timestamp)
-            
-            # Generate motivational message
-            message = await self.generate_motivational_message(line_reports)
-            
-            # Send to appropriate recipients
-            recipients = self.test_numbers if test_mode else self.test_numbers  # Use test numbers for now
-            successful_sends = 0
-            
-            for phone_number in recipients:
-                try:
-                    success = await self.send_whatsapp_report(pdf_path, message, phone_number)
-                    if success:
-                        successful_sends += 1
-                except Exception as e:
-                    logger.error(f"❌ Failed to send report to {phone_number}: {e}")
-            
-            self.last_report_time = timestamp
-            
-            result = {
-                "status": "success",
-                "report_generated": True,
-                "pdf_file": str(pdf_path),
-                "csv_file": csv_path,
-                "flagged_employees": len(flagged_employees),
-                "lines_affected": len(line_reports),
-                "message": message,
-                "timestamp": timestamp.isoformat(),
-                "test_mode": test_mode,
-                "whatsapp_sent_to": recipients,
-                "successful_sends": successful_sends
-            }
-            
-            logger.info(f"✅ Report generation completed successfully: {len(flagged_employees)} flagged employees, {successful_sends} successful sends")
-            return result
-            
-        except Exception as e:
-            logger.error(f"❌ Report generation failed: {e}")
+            csv_path = self.generate_csv_report(part_rows, timestamp)
+
+            # 5) Send messages (remember test_mode forces sending to test numbers)
+            results = []
+            for d in deliveries:
+                phone = d["phone"]
+                name = d["name"]
+                row = d["part_row"]
+                message = self._format_supervisor_message(
+                    sup_name=name,
+                    unit=row.unit_code,
+                    floor=row.floor_name,
+                    line=row.line_name,
+                    part=row.part_name,
+                    prodn=row.prodn_pcs,
+                    eff100=row.eff100,
+                    eff_per=row.eff_per
+                )
+
+                # If test_mode: override recipients to the test numbers provided (send same message)
+                if test_mode:
+                    recipients = self.test_numbers
+                else:
+                    recipients = [phone]
+
+                for rec in recipients:
+                    res = await self.send_whatsapp_report(rec, message, pdf_path=str(pdf_path), csv_path=csv_path)
+                    results.append({"to": rec, "result": res})
+
+            logger.info(f"Completed sends: {len(results)} items")
             return {
-                "status": "error",
-                "message": f"Report generation failed: {str(e)}",
-                "flagged_count": 0,
-                "lines_affected": 0,
-                "timestamp": timestamp.isoformat()
+                "status": "success",
+                "timestamp": timestamp.isoformat(),
+                "attempted_sends": len(results),
+                "send_results": results,
+                "pdf": str(pdf_path),
+                "csv": csv_path
             }
-    
-    def start_hourly_scheduler(self):
-        """Start the hourly report scheduler"""
-        if self.is_running:
-            logger.info("Hourly scheduler already running")
-            return
-            
-        self.is_running = True
-        
-        schedule.every().hour.at(":00").do(self._run_hourly_report)
-        
-        def run_scheduler():
-            while self.is_running:
-                schedule.run_pending()
-                time.sleep(60)  # Check every minute
-                
-        self.scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
-        self.scheduler_thread.start()
-        
-        logger.info("✅ Hourly report scheduler started - reports will be generated every hour at :00 minutes")
-    
-    def stop_hourly_scheduler(self):
-        """Stop the hourly report scheduler"""
-        self.is_running = False
-        schedule.clear()
-        logger.info("🛑 Hourly report scheduler stopped")
-    
-    def _run_hourly_report(self):
-        """Run the hourly report generation (called by scheduler)"""
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(self.generate_and_send_reports(test_mode=False))
-            loop.close()
-        except Exception as e:
-            logger.error(f"❌ Scheduled hourly report failed: {e}")
-    
-    def get_status(self) -> Dict[str, Any]:
-        """Get service status"""
-        return {
-            "service": "Enhanced WhatsApp Reporting Service",
-            "status": "active",
-            "company": self.company_name,
-            "scheduler_running": self.is_running,
-            "last_report_time": self.last_report_time.isoformat() if self.last_report_time else None,
-            "reports_directory": str(self.reports_dir),
-            "test_numbers": self.test_numbers,
-            "twilio_configured": self._is_config_valid(),
-            "temporarily_disabled": self.temporarily_disabled,
-            "next_scheduled_report": "Every hour at :00 minutes",
-            "configuration_valid": self._is_config_valid()
-        }
-    def generate_diagnostic_insights(self, line_reports: Dict[str, "LineReport"]) -> List[str]:
-        """Generate diagnostic insights about production issues"""
-        insights = []
-
-        # Analyze common patterns in flagged employees
-        operation_issues = defaultdict(int)
-        style_issues = defaultdict(int)
-
-        for line_report in line_reports.values():
-            for style, employees in line_report.style_groups.items():
-                for emp in employees:
-                    operation_issues[emp.new_oper_seq] += 1
-                    style_issues[emp.style_no] += 1
-
-        # Identify most problematic operations
-        if operation_issues:
-            top_issue = max(operation_issues.items(), key=lambda x: x[1])
-            insights.append(f"Most problematic operation: {top_issue[0]} ({top_issue[1]} issues)")
-
-        # Identify most problematic styles
-        if style_issues:
-            top_style = max(style_issues.items(), key=lambda x: x[1])
-            insights.append(f"Most problematic style: {top_style[0]} ({top_style[1]} issues)")
-
-        return insights
-
-    async def generate_motivational_message(self, line_reports: Dict[str, "LineReport"]) -> str:
-        """Generate AI-powered motivational WhatsApp message with diagnostics"""
-        try:
-            if not line_reports:
-                return """🎉 Excellent news! All production lines are performing above target efficiency this hour."""
-
-            # Get diagnostic insights
-            diagnostics = self.generate_diagnostic_insights(line_reports)
-
-            total_flagged = sum(report.total_flagged for report in line_reports.values())
-            line_count = len(line_reports)
-
-            message = f"""Hello Supervisor! 📊
-
-Hourly production report:
-- {total_flagged} team members across {line_count} lines need support
-- Key insights: {', '.join(diagnostics[:2])}
-
-With your guidance, the team can quickly improve! 🚀
-
-Review the attached report for details."""
-            return message
 
         except Exception as e:
-            logger.error(f"❌ Failed to generate motivational message: {e}")
-            return "Please find the attached hourly production report."
-# Global service instance
+            logger.error(f"Report generation failed: {e}", exc_info=True)
+            return {"status": "error", "message": str(e), "timestamp": timestamp.isoformat()}
+
+
+# Export an instance (keeps compatibility with existing imports)
 whatsapp_service = ProductionReadyWhatsAppService()
+whatsapp_service.start_hourly_scheduler()

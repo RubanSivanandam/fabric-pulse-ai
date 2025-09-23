@@ -46,7 +46,7 @@ router = APIRouter()
 
 # Local imports
 from config import config
-from whatsapp_service import whatsapp_service, AlertMessage
+from whatsapp_service import whatsapp_service
 import sqlalchemy as sa
 from sqlalchemy import create_engine, text
 import urllib.parse
@@ -1966,6 +1966,18 @@ Acts like ChatGPT (smooth typing animation in frontend).
 #             "records_used": len(df),
 #             "enhancement_level": "fallback_mode"
 #         }
+@router.post("/test_whatsapp_alerts")
+async def test_whatsapp_alerts(test_mode: bool = True):
+    """
+    Test endpoint to send sample WhatsApp alerts.
+    test_mode=True → sends only to DEFAULT_TEST_NUMBERS (mock or Twilio sandbox)
+    """
+    try:
+        results = await whatsapp_service.generate_and_send_reports(test_mode=test_mode)
+        return {"status": "success", "results": results}
+    except Exception as e:
+        logger.error(f"test_whatsapp_alerts failed: {e}", exc_info=True)
+        return {"status": "error", "reason": str(e)}
 
 
 from ollama_client import ollama_client  # AI service
@@ -2288,150 +2300,69 @@ async def predict_efficiency(request: PredictEfficiencyRequest):
 @router.post("/api/ai/ultra_chatbot")
 async def ultra_advanced_ai_chatbot(request: UltraChatRequest):
     try:
-        # Load and concatenate data sources
-        dfs = [AI_CACHE.get(key) for key in ["production_data", "efficiency_data", "chatbot_data"] if AI_CACHE.get(key) is not None]
-        data_available = dfs and all(not df.empty for df in dfs) if dfs else False
-        df = pd.concat(dfs, ignore_index=True) if data_available else None
+        # Get cached dataframe (loaded at refresh time)
+        df = AI_CACHE.get("chatbot_data")
 
+        # Context: lightweight only (no heavy aggregation)
         if df is not None and not df.empty:
-            df['TranDate'] = pd.to_datetime(df['TranDate'], errors='coerce')
-
-        # Enhanced production query detection
-        production_keywords = [
-            r"\b(efficiency|line|part|operation|style|supervisor|production|target|actual|gap)\b",
-            r"S\d+-\d+",  # Line names like S1-1
-            r"\d{4}-\d{2}-\d{2}",  # Dates
-            r"\b(last month|yesterday|today)\b",
-            r"from \d{4}-\d{2}-\d{2} to \d{4}-\d{2}-\d{2}",
-        ]
-        is_production_query = any(re.search(pattern, request.query.lower()) for pattern in production_keywords)
-        logger.debug(f"Query: '{request.query}', is_production_query: {is_production_query}, data_available: {data_available}")
-
-        context = ""
-        if data_available and is_production_query:
-            # Summarize all data without filtering
-            if 'isFinOper' in df.columns:
-                df_fin = df[df["isFinOper"] == "Y"]
-            else:
-                df_fin = df
-
-            # Line summary
-            line_summary = df_fin.groupby("LineName").agg({
-                "ProdnPcs": "sum",
-                "Eff100": "mean",
-                "EffPer": "mean"
-            }).reset_index()
-            line_summary_str = "\n".join([
-                f"Line {row.LineName}: Total Production {int(row.ProdnPcs)} pcs, "
-                f"Target {int(row.Eff100)}, Efficiency {row.EffPer:.1f}%"
-                for _, row in line_summary.iterrows()
-            ])
-            context += f"Line Summary:\n{line_summary_str}\n\n"
-
-            # Part summary
-            part_summary = df_fin.groupby("PartName").agg({
-                "ProdnPcs": "sum",
-                "EffPer": "mean"
-            }).reset_index()
-            part_summary_str = "\n".join([
-                f"Part {row.PartName}: Total Production {int(row.ProdnPcs)} pcs, Efficiency {row.EffPer:.1f}%"
-                for _, row in part_summary.iterrows()
-            ])
-            context += f"Part Summary:\n{part_summary_str}\n\n"
-
-            # Operation summary
-            if 'NewOperSeq' in df_fin.columns:
-                oper_summary = df_fin.groupby("NewOperSeq").agg({
-                    "ProdnPcs": "sum",
-                    "EffPer": "mean"
-                }).reset_index()
-                oper_summary_str = "\n".join([
-                    f"Operation {row.NewOperSeq}: Total Production {int(row.ProdnPcs)} pcs, Efficiency {row.EffPer:.1f}%"
-                    for _, row in oper_summary.iterrows()
-                ])
-                context += f"Operation Summary:\n{oper_summary_str}\n\n"
-
-            # Supervisor summary
-            if 'Supervisor' in df_fin.columns:
-                sup_summary = df_fin.groupby("Supervisor").agg({
-                    "ProdnPcs": "sum",
-                    "EffPer": "mean"
-                }).reset_index()
-                sup_summary_str = "\n".join([
-                    f"Supervisor {row.Supervisor}: Total Production {int(row.ProdnPcs)} pcs, Efficiency {row.EffPer:.1f}%"
-                    for _, row in sup_summary.iterrows()
-                ])
-                context += f"Supervisor Summary:\n{sup_summary_str}\n\n"
-
-            # Date summary
-            if 'TranDate' in df_fin.columns:
-                date_summary = df_fin.groupby(df_fin['TranDate'].dt.date).agg({
-                    "ProdnPcs": "sum",
-                    "EffPer": "mean"
-                }).reset_index()
-                date_summary_str = "\n".join([
-                    f"Date {row.TranDate}: Total Production {int(row.ProdnPcs)} pcs, Efficiency {row.EffPer:.1f}%"
-                    for _, row in date_summary.iterrows()
-                ])
-                context += f"Date Summary:\n{date_summary_str}\n\n"
-
+            context = (
+                f"Dataset has ~{len(df)} records. "
+                f"Key columns: {', '.join(df.columns)}. "
+                f"Important fields: TranDate (date), ProdnPcs (actual production), "
+                f"Eff100 (target), EffPer (efficiency %), LineName, PartName, Supervisor."
+            )
         else:
-            context = "No production, efficiency, or chatbot data available."
+            context = "No cached production data available."
 
-        # Prompt based on query type
-        best_practices = """
-Best Practices to Increase Production in Garment Industry:
-- Streamline production processes using lean manufacturing principles like 5S, Just-In-Time (JIT), and waste reduction.
-- Embrace sustainable practices: energy-efficient technologies, reduce wastage, responsible sourcing.
-- Invest in staff training and motivation: Happy workers are 12% more productive; use incentive schemes, proper training.
-- Implement automation and technology: Use auto machines, AI for quality control, predictive maintenance.
-- Optimize workflows and layout: Reduce movement, better line layout, continuous feeding, eliminate bottlenecks.
-- Conduct time studies, capacity studies, product studies to set realistic targets and reduce quality issues.
-- Employee engagement: Select right operators, use work aids, better movements.
-- Quality control: Establish strong standards to minimize defects.
-- Market expansion and collaboration: Collaborate with artisans, expand markets.
-- Cost optimization: Boost productivity, cut waste, improve efficiency.
+        # --- POWERFUL SYSTEM PROMPT ---
+        business_logic = f"""
+You are a production intelligence assistant for a garment factory.
+
+Responsibilities:
+1. Analyze production data (ProdnPcs, Eff100, EffPer, TranDate, LineName, PartName, Supervisor).
+2. Always detect efficiency trends and PREDICT whether they are improving, declining, or stable.
+3. If efficiency <85%, flag as a RED ALERT and give corrective actions.
+4. If efficiency is 85–95%, classify as ACCEPTABLE but suggest improvements.
+5. If efficiency >95%, classify as EXCELLENT and encourage continuation.
+6. Always explain WHY the trend is happening, not just report numbers.
+7. End every response with 2–3 specific, actionable improvement steps for supervisors.
+8. If no matching data, reply: "No data found for this query, but here are best practices..."
+
+Output format:
+- First line: Direct insight (efficiency %, classification, trend prediction).
+- Next lines: Supporting reasoning (with data if available).
+- Final lines: Recommended actions (bulleted).
+
+Best Practices to Increase Production:
+- Apply lean manufacturing (5S, Just-In-Time, waste reduction).
+- Motivate & train operators; use small incentives.
+- Balance lines, optimize workstation layout to reduce idle time.
+- Automate repetitive tasks; strengthen inline quality control.
+- Encourage continuous feedback between workers and supervisors.
+
+Remember: Be concise, professional, and focused on real-time production improvement.
 """
 
-        if data_available and is_production_query:
-            business_logic = """
-You are an AI assistant specializing in garment production analysis. Use the provided context to answer queries about production data, focusing on efficiency metrics (ProdnPcs, Eff100, EffPer) by line, part, operation, supervisor, or date (TranDate). The data includes:
-- LineName (e.g., S1-1): Production lines.
-- PartName: Parts within a line, supervised by one or more supervisors.
-- StyleNo: Styles within a part, containing multiple operations (NewOperSeq).
-- isFinOper: 'Y' marks final operations, providing actual produced pieces (ProdnPcs), target (Eff100), and efficiency percentage (EffPer).
-- TranDate: Date of the data entry.
+        # --- Final AI Prompt ---
+        base_prompt = (
+            business_logic
+            + f"\n\nUser query: {request.query}\n\nContext:\n{context}"
+        )
 
-Filter the data in the context based on the user's query (e.g., specific LineName, PartName, NewOperSeq, TranDate, or date ranges like 'yesterday', 'last month', or 'from YYYY-MM-DD to YYYY-MM-DD'). Provide concise, data-driven answers with proper spacing and formatting. Avoid generic greetings unless the query is conversational. If no specific data matches, use aggregated summaries or indicate no data is available. For efficiency trend predictions, analyze patterns in EffPer over time (TranDate) and suggest future trends based on historical data. Examples:
-- "Efficiency for S1-1 on 2025-09-20": Provide data for S1-1 on that date.
-- "Part-wise efficiency last month": Summarize by PartName for the last month.
-- "Operation 123 efficiency": Filter by NewOperSeq 123.
-- "Efficiency trend for S1-1": Analyze EffPer over time and predict future trends.
-
-When relevant, include best practices to improve production and efficiency:
-""" + best_practices
-
-            base_prompt = business_logic + f"\n\nUser query: {request.query}\n\nContext:\n{context}"
-        else:
-            # Conversational prompt for non-production queries or no data
-            base_prompt = (
-                f"You are a friendly, conversational AI assistant. Respond to the user's query in a clear, natural, and engaging manner. "
-                f"Avoid technical jargon unless requested. If no production data is available or the query is unrelated to production, provide a general response. "
-                f"Ensure proper spacing between words. "
-                f"User query: {request.query}"
-            )
-
-        logger.debug(f"Ultra chatbot prompt: {base_prompt}")
-
+        # --- Streaming AI Response ---
         async def response_stream():
             async for frag in ollama_client.stream_chat(
                 model="mistral:latest",
                 messages=[{"role": "user", "content": base_prompt}],
-                options={"session": AI_CACHE.get("chatbot_session"), "persist": True, "temperature": 0.7, "top_p": 0.9},
+                options={
+                    "session": AI_CACHE.get("chatbot_session"),
+                    "persist": True,
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                },
             ):
                 if frag:
-                    logger.debug(f"Streaming fragment: '{frag}'")
-                    yield frag  # Preserve original spacing
+                    yield frag  # Stream directly, no buffering
 
         return StreamingResponse(response_stream(), media_type="text/plain")
 

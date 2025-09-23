@@ -32,6 +32,7 @@ from fabric_pulse_ai_main import (
     analyze_production_data,
     get_operator_efficiencies,
     health_check,
+    test_whatsapp_alerts,
     ultra_advanced_ai_chatbot,
 )
 
@@ -75,6 +76,7 @@ app.post("/api/ai/suggest_ops")(ai_suggest_operations)
 app.post("/api/ai/completion")(ai_completion)
 app.post("/api/ai/predict_efficiency")(predict_efficiency)
 app.post("/api/ai/refresh_cache")(refresh_ai_cache)
+app.post("test_whatsapp_alerts")(test_whatsapp_alerts)
 app.get("/api/ai/refresh_status")(cache_status)
 app.get("/api/status")(get_service_status)
 app.get("/api/rtms/filters/units")(get_unit_codes)
