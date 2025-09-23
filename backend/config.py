@@ -103,7 +103,7 @@ class FabricPulseConfig:
         # AI configuration
         self.ai = AIConfig(
             primary_model=os.getenv('AI_MODEL', 'mistral:latest'),
-            use_gpu=os.getenv('AI_USE_GPU', 'true').lower() == 'true',
+            use_gpu=os.getenv('AI_USE_GPU', 'false').lower() == 'true',
             max_length=int(os.getenv('AI_MAX_LENGTH', '512')),
             temperature=float(os.getenv('AI_TEMPERATURE', '0.7')),
             cache_dir=os.getenv('AI_CACHE_DIR', './ai_cache')
@@ -122,7 +122,7 @@ class FabricPulseConfig:
             host=os.getenv('SERVICE_HOST', '0.0.0.0'),
             port=int(os.getenv('SERVICE_PORT', '8000')),
             log_level=os.getenv('LOG_LEVEL', 'INFO'),
-            workers=int(os.getenv('WORKERS', '1')),
+            workers=int(os.getenv('WORKERS', '4')),
             monitoring_interval=int(os.getenv('MONITORING_INTERVAL', '10'))
         )
     
