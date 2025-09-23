@@ -156,14 +156,14 @@ if __name__ == "__main__":
         client = OllamaClient()
         print("=== Streaming Chat Test ===")
         async for token in client.stream_chat(
-            model="llama3.2:3b",
+            model="mistral:latest",
             messages=[{"role": "user", "content": "Hello Ollama!"}],
         ):
             print(token, end="", flush=True)
 
         print("\n\n=== Completion Test ===")
         async for result in client.generate_completion(
-            model="llama3.2:3b", prompt="Write a haiku about AI.", stream=False
+            model="mistral:latest", prompt="Write a haiku about AI.", stream=False
         ):
             print(result)
 

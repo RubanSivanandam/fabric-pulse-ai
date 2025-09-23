@@ -4,12 +4,21 @@
 // - Keeps all previous features (chips mapped to endpoints, API caller with AbortController,
 //   placeholder bot response, retry/copy, localStorage persistence, framer-motion transitions).
 // - Adds fixes: Bubble overflow-x: auto, MetaRow flex-wrap + overflow-x: auto, Card overflow-x: hidden
-//
+// - New: Added word-by-word typing animation for bot responses to make it feel more responsive.
+//   After receiving the full API response, the placeholder is replaced with an empty string,
+//   then words are appended one by one with a short delay (adjustable via TYPING_DELAY).
+// - Fix for streaming: For the ultra_chatbot endpoint (used for general queries like "hi"), implement
+//   true streaming using fetch and ReadableStream to append response chunks incrementally in real-time.
+//   This makes the AI feel faster and more responsive by populating the UI as the response generates,
+//   instead of waiting for the full response. Assumes the backend supports streaming (e.g., text/plain chunks).
+//   For other endpoints, keep the existing full-response + typing animation.
+
 // Dependencies:
-//   axios, styled-components, framer-motion, lucide-react
+//   styled-components, framer-motion, lucide-react
+// (Removed axios; using native fetch for both regular and streaming requests)
 //
 // Install if needed:
-//   npm i axios styled-components framer-motion lucide-react
+//   npm i styled-components framer-motion lucide-react
 //
 // Drop-in replacement for your previous RTMSBot.jsx.
 
@@ -24,7 +33,6 @@ import React, {
 } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import axios from "axios";
 import styled, { css } from "styled-components";
 import {
   Send,
@@ -438,6 +446,7 @@ const RTMSBot = () => {
   const historyRef = useRef(null);
   const inputRef = useRef(null);
   const abortRef = useRef(null); // AbortController for api calls
+  const typingRef = useRef(null); // To store typing interval for cleanup
 
   /* Suggestions mapping to actual backend endpoints */
   const suggestions = useMemo(
@@ -491,27 +500,74 @@ const RTMSBot = () => {
     }
   }, [isOpen]);
 
-  /* Generic POST with abort support using axios.
-     Normalizes errors to throw Error objects with message */
-  const apiPost = useCallback(async (url, body = {}, config = {}) => {
-    // Cancel previous request if present
+  /* Cleanup typing interval on unmount */
+  useEffect(() => {
+    return () => {
+      if (typingRef.current) {
+        clearInterval(typingRef.current);
+      }
+    };
+  }, []);
+
+  /* Generic POST using fetch (replaces axios). Normalizes errors. */
+  const apiPost = useCallback(async (url, body = {}) => {
     if (abortRef.current) {
-      try { abortRef.current.abort(); } catch (e) {}
+      abortRef.current.abort();
     }
     abortRef.current = new AbortController();
     const signal = abortRef.current.signal;
 
     try {
-      const res = await axios.post(url, body, { signal, timeout: 1000000, ...config });
-      return res.data;
-    } catch (err) {
-      // axios v1+ uses `err.code === 'ERR_CANCELED'` when aborted with axios cancel token
-      // But AbortController cancel with axios also results in an error; normalize it.
-      if (err?.name === "CanceledError" || err?.code === "ERR_CANCELED") {
-        throw new Error("Request cancelled");
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal,
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || errData.message || 'Network error');
       }
-      const message = err?.response?.data?.detail || err?.response?.data?.message || err?.message || "Network error";
-      throw new Error(message);
+      return await res.json();
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        throw new Error('Request cancelled');
+      }
+      throw err;
+    }
+  }, []);
+
+  /* Streaming POST using fetch and ReadableStream. Calls onChunk with each new chunk. */
+  const streamPost = useCallback(async (url, body = {}, onChunk) => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+    abortRef.current = new AbortController();
+    const signal = abortRef.current.signal;
+
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal,
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(errText || 'Network error');
+      }
+      const reader = res.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = new TextDecoder().decode(value);
+        onChunk(chunk);
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        throw new Error('Request cancelled');
+      }
+      throw err;
     }
   }, []);
 
@@ -535,55 +591,59 @@ const RTMSBot = () => {
 
     try {
       let data = null;
+      let answer = '';
 
       if (endpoint) {
         /* Map known endpoints to payloads and parsing logic */
         if (endpoint.endsWith("/summarize")) {
           const body = payload ?? { text: trimmed, length: "short" };
           data = await apiPost(endpoint, body);
-          const answer = data?.summary || data?.answer || (typeof data === "string" ? data : JSON.stringify(data));
-          setMessages((prev) => prev.map((m) => (m.id === botPlaceholder.id ? { ...m, content: String(answer) } : m)));
+          answer = data?.summary || data?.answer || (typeof data === "string" ? data : JSON.stringify(data));
+          animateResponse(botPlaceholder.id, String(answer));
         } else if (endpoint.endsWith("/suggest_ops")) {
           const body = payload ?? { context: "", query: trimmed };
           data = await apiPost(endpoint, body);
           // Backend may return an array of suggestions or a textual summary
           const suggestionsList = data?.suggestions || data?.ops || [];
           if (Array.isArray(suggestionsList) && suggestionsList.length > 0) {
-            const textOut = suggestionsList.map((s, idx) => `${idx + 1}. ${s.title || s.label || s}`).join("\n\n");
-            setMessages((prev) => prev.map((m) => (m.id === botPlaceholder.id ? { ...m, content: textOut } : m)));
+            answer = suggestionsList.map((s, idx) => `${idx + 1}. ${s.title || s.label || s}`).join("\n\n");
           } else {
-            const answer = data?.message || data?.result || JSON.stringify(data);
-            setMessages((prev) => prev.map((m) => (m.id === botPlaceholder.id ? { ...m, content: String(answer) } : m)));
+            answer = data?.message || data?.result || JSON.stringify(data);
           }
+          animateResponse(botPlaceholder.id, String(answer));
         } else if (endpoint.endsWith("/predict_efficiency") || endpoint.includes("predict_efficiency")) {
           const body = payload ?? {};
           data = await apiPost(endpoint, body);
           // Expecting predictions_by_line or similar structure
           if (data?.predictions_by_line) {
-            const lines = Object.entries(data.predictions_by_line).map(([line, pred]) => `${line}: ${pred.prediction || JSON.stringify(pred)}`).join("\n");
-            setMessages((prev) => prev.map((m) => (m.id === botPlaceholder.id ? { ...m, content: `Predictions:\n${lines}` } : m)));
+            answer = Object.entries(data.predictions_by_line).map(([line, pred]) => `${line}: ${pred.prediction || JSON.stringify(pred)}`).join("\n");
           } else {
-            const answer = data?.summary || data?.result || JSON.stringify(data);
-            setMessages((prev) => prev.map((m) => (m.id === botPlaceholder.id ? { ...m, content: String(answer) } : m)));
+            answer = data?.summary || data?.result || JSON.stringify(data);
           }
+          animateResponse(botPlaceholder.id, `Predictions:\n${answer}`);
         } else if (endpoint.endsWith("/ultra_chatbot") || endpoint.includes("/ultra_chatbot") || endpoint.includes("ultra_chat")) {
-          // Ultra chatbot: generic handler
+          // Ultra chatbot: use streaming for incremental updates
           const body = payload ?? { query: trimmed, context_months: 2 };
-          data = await apiPost(endpoint, body);
-          // Various backend responses might have different shapes:
-          const answer = data?.answer || data?.ai_prediction_text || data?.result || (typeof data === "string" ? data : JSON.stringify(data));
-          setMessages((prev) => prev.map((m) => (m.id === botPlaceholder.id ? { ...m, content: String(answer) } : m)));
+          // Replace placeholder with empty content
+          setMessages((prev) => prev.map((m) => m.id === botPlaceholder.id ? { ...m, content: "" } : m));
+          await streamPost(endpoint, body, (chunk) => {
+            answer += chunk;
+            setMessages((prev) => prev.map((m) => m.id === botPlaceholder.id ? { ...m, content: answer } : m));
+          });
         } else {
           // Generic fallback: send text as-is
           data = await apiPost(endpoint, payload ?? { text: trimmed });
-          const answer = data?.answer || data?.result || (typeof data === "string" ? data : JSON.stringify(data).slice(0, 3000));
-          setMessages((prev) => prev.map((m) => (m.id === botPlaceholder.id ? { ...m, content: String(answer) } : m)));
+          answer = data?.answer || data?.result || (typeof data === "string" ? data : JSON.stringify(data).slice(0, 3000));
+          animateResponse(botPlaceholder.id, String(answer));
         }
       } else {
-        // Default to ultra_chatbot if no endpoint chosen
-        data = await apiPost("/api/ai/ultra_chatbot", { query: trimmed });
-        const answer = data?.answer || data?.ai_prediction_text || JSON.stringify(data).slice(0, 3000);
-        setMessages((prev) => prev.map((m) => (m.id === botPlaceholder.id ? { ...m, content: String(answer) } : m)));
+        // Default to ultra_chatbot with streaming
+        // Replace placeholder with empty content
+        setMessages((prev) => prev.map((m) => m.id === botPlaceholder.id ? { ...m, content: "" } : m));
+        await streamPost("/api/ai/ultra_chatbot", { query: trimmed }, (chunk) => {
+          answer += chunk;
+          setMessages((prev) => prev.map((m) => m.id === botPlaceholder.id ? { ...m, content: answer } : m));
+        });
       }
     } catch (err) {
       console.error("API request failed:", err);
@@ -594,7 +654,41 @@ const RTMSBot = () => {
       setIsLoading(false);
       abortRef.current = null;
     }
-  }, [apiPost, isLoading]);
+  }, [apiPost, streamPost, isLoading]);
+
+  /* Helper to animate the response word by word (for non-streaming endpoints) */
+  const animateResponse = (messageId, fullAnswer) => {
+    // Clear existing typing interval if any
+    if (typingRef.current) {
+      clearInterval(typingRef.current);
+    }
+
+    // Reset content to empty
+    setMessages((prev) =>
+      prev.map((m) => (m.id === messageId ? { ...m, content: "" } : m))
+    );
+
+    // Split into words (preserving spaces and newlines roughly)
+    const words = fullAnswer.split(/\s+/);
+    let index = 0;
+
+    typingRef.current = setInterval(() => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id === messageId) {
+            const newContent = m.content + (m.content ? " " : "") + words[index];
+            index++;
+            if (index >= words.length) {
+              clearInterval(typingRef.current);
+              typingRef.current = null;
+            }
+            return { ...m, content: newContent };
+          }
+          return m;
+        })
+      );
+    }, 10); // Adjust this delay (ms) for typing speed; lower = faster
+  };
 
   /* UI form submit handler */
   const handleSubmit = useCallback((ev) => {
@@ -712,7 +806,7 @@ const RTMSBot = () => {
 
                 <Body>
                   {/* Suggestion chips */}
-                  <SuggestionChips suggestions={suggestions} onSelect={handleChipSelect} />
+                  {/* <SuggestionChips suggestions={suggestions} onSelect={handleChipSelect} /> */}
 
                   {/* Chat history area (auto-scroll) */}
                   <ChatHistory
@@ -755,4 +849,3 @@ const RTMSBot = () => {
 };
 
 export default RTMSBot;
-

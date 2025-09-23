@@ -102,7 +102,7 @@ class FabricPulseConfig:
         
         # AI configuration
         self.ai = AIConfig(
-            primary_model=os.getenv('AI_MODEL', 'llama3.2:3B'),
+            primary_model=os.getenv('AI_MODEL', 'mistral:latest'),
             use_gpu=os.getenv('AI_USE_GPU', 'true').lower() == 'true',
             max_length=int(os.getenv('AI_MAX_LENGTH', '512')),
             temperature=float(os.getenv('AI_TEMPERATURE', '0.7')),

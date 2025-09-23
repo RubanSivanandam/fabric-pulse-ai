@@ -53,6 +53,8 @@ import urllib.parse
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from ultra_advanced_chatbot import ultra_chatbot, make_ultra_advanced_pdf_report
+
+import warnings
 TEST_NUMBERS = ["+919943625493", "+918939990949"]
 
 # Setup logging
@@ -61,6 +63,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
 
 # FastAPI app
 app = FastAPI(
@@ -214,7 +217,7 @@ def should_send_whatsapp(emp_data: dict, line_performers: List[dict]) -> bool:
 class OllamaAIService:
     """Ollama AI Service for local llama-3.2:3b integration"""
     
-    def __init__(self, model: str = "llama3.2:3b"):
+    def __init__(self, model: str = "mistral:latest"):
         self.model = model
         self.available = self._check_ollama_availability()
     
@@ -390,7 +393,7 @@ class EnhancedRTMSEngine:
         self.ai_service = OllamaAIService(config.ai.primary_model)
         
         # WhatsApp notifications disabled flag
-        self.whatsapp_disabled = True
+        self.whatsapp_disabled = False
         logger.info("🚫 WhatsApp notifications temporarily DISABLED")
         
         # Start background monitoring
@@ -1622,7 +1625,7 @@ Acts like ChatGPT (smooth typing animation in frontend).
 #         # -------------------------
 #         OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
-#         async def _stream_from_ollama_http(prompt_text: str, model: str = "llama3.2:3b", max_tokens: int = 1000, temperature: float = 0.25):
+#         async def _stream_from_ollama_http(prompt_text: str, model: str = "mistral:latest", max_tokens: int = 1000, temperature: float = 0.25):
 #             """
 #             Stream from Ollama HTTP /api/generate (streaming)
 #             Yields raw string fragments to be appended to answer.
@@ -1678,7 +1681,7 @@ Acts like ChatGPT (smooth typing animation in frontend).
 #         except Exception:
 #             local_ollama = None
 
-#         async def _stream_from_local_client_if_possible(prompt_text: str, model: str = "llama3.2:3b", max_tokens: int = 1000, temperature: float = 0.25):
+#         async def _stream_from_local_client_if_possible(prompt_text: str, model: str = "mistral:latest", max_tokens: int = 1000, temperature: float = 0.25):
 #             """
 #             Try a variety of possible streaming methods on local ollama_client.
 #             If not available or raises, this function will raise to let caller fallback to HTTP.
@@ -2073,7 +2076,7 @@ async def refresh_ai_cache():
             AI_CACHE["chatbot_session"] = session_id
             # This seeds the model with context
             async for _ in ollama_client.stream_chat(
-                model="llama3.2:3b",
+                model="mistral:latest",
                 messages=[{"role": "system", "content": system_prompt}],
                 options={"persist": True, "session": session_id}
             ):
@@ -2156,22 +2159,31 @@ async def ai_summarize(request: SummarizeRequest):
             for ln, row in grouped.head(10).iterrows():
                 lines.append(f"Line {ln}: Target {int(row.Eff100)}, Produced {int(row.ProdnPcs)}")
             context = "Recent production summary:\n" + "\n".join(lines)
+        else:
+            context = "No production data available."
 
-        prompt = request.text or f"Summarize garment production performance.\n\n{context}"
+        # Explicitly instruct the model to summarize
+        prompt = (
+            f"Provide a concise summary of garment production performance based on the following data.\n"
+            f"Ensure the response is clear, uses proper spacing, and avoids generic greetings.\n\n"
+            f"User input: {request.text or 'Summarize garment production performance.'}\n\n"
+            f"Context:\n{context}"
+        )
 
-        chunks = []
-        async for frag in ollama_client.generate_completion(
-            model="llama3.2:3b", prompt=prompt, stream=True
-        ):
-            chunks.append(frag)
-        summary = "".join(chunks)
+        async def response_stream():
+            async for frag in ollama_client.generate_completion(
+                model="mistral:latest", prompt=prompt, stream=True
+            ):
+                stripped_frag = frag.strip()
+                if stripped_frag:  # Only yield non-empty fragments
+                    logger.debug(f"Streaming fragment: '{stripped_frag}'")
+                    yield stripped_frag + " "  # Add space to prevent concatenation issues
 
-        return {"status": "success", "summary": summary}
+        return StreamingResponse(response_stream(), media_type="text/plain")
 
     except Exception as e:
         logger.error(f"Summarization failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="AI summarization failed")
-
 
 # ================== SUGGEST OPS ==================
 @router.post("/api/ai/suggest_ops")
@@ -2196,14 +2208,13 @@ async def ai_suggest_operations(request: SuggestOpsRequest):
 
         base_prompt = f"User query: {request.query}\n\nContext:\n{context}"
 
-        chunks = []
-        async for frag in ollama_client.generate_completion(
-            model="llama3.2:3b", prompt=base_prompt, stream=True
-        ):
-            chunks.append(frag)
-        suggestions = "".join(chunks)
+        async def response_stream():
+            async for frag in ollama_client.generate_completion(
+                model="mistral:latest", prompt=base_prompt, stream=True
+            ):
+                yield frag.strip()
 
-        return {"status": "success", "suggestions": suggestions, "context_used": context}
+        return StreamingResponse(response_stream(), media_type="text/plain")
 
     except Exception as e:
         logger.error(f"Suggest ops failed: {e}", exc_info=True)
@@ -2227,19 +2238,17 @@ async def ai_completion(request: CompletionRequest):
 
         prompt = request.prompt or context
 
-        chunks = []
-        async for frag in ollama_client.generate_completion(
-            model="llama3.2:3b", prompt=prompt, stream=True
-        ):
-            chunks.append(frag)
-        completion = "".join(chunks)
+        async def response_stream():
+            async for frag in ollama_client.generate_completion(
+                model="mistral:latest", prompt=prompt, stream=True
+            ):
+                yield frag.strip()
 
-        return {"status": "success", "text": completion, "prompt_used": prompt}
+        return StreamingResponse(response_stream(), media_type="text/plain")
 
     except Exception as e:
         logger.error(f"Completion failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="AI completion failed")
-
 
 # ================== PREDICT EFFICIENCY ==================
 @router.post("/api/ai/predict_efficiency")
@@ -2247,7 +2256,7 @@ async def predict_efficiency(request: PredictEfficiencyRequest):
     try:
         df = AI_CACHE.get("efficiency_data")
         if df is None or df.empty:
-            return {"status": "no_data", "message": "Cache not ready"}
+            raise HTTPException(status_code=503, detail="Cache not ready")
 
         lines = []
         for _, row in df.head(200).iterrows():
@@ -2262,14 +2271,13 @@ async def predict_efficiency(request: PredictEfficiencyRequest):
         context = "\n".join(lines)
         prompt = f"User query: {request.query}\n\nPredict efficiency trends:\n{context}"
 
-        chunks = []
-        async for frag in ollama_client.generate_completion(
-            model="llama3.2:3b", prompt=prompt, stream=True
-        ):
-            chunks.append(frag)
-        ai_resp = "".join(chunks)
+        async def response_stream():
+            async for frag in ollama_client.generate_completion(
+                model="mistral:latest", prompt=prompt, stream=True
+            ):
+                yield frag.strip()
 
-        return {"status": "success", "ai_prediction_text": ai_resp, "rows_analyzed": len(df)}
+        return StreamingResponse(response_stream(), media_type="text/plain")
 
     except Exception as e:
         logger.error(f"Prediction failed: {e}", exc_info=True)
@@ -2280,56 +2288,156 @@ async def predict_efficiency(request: PredictEfficiencyRequest):
 @router.post("/api/ai/ultra_chatbot")
 async def ultra_advanced_ai_chatbot(request: UltraChatRequest):
     try:
-        df = AI_CACHE.get("chatbot_data")
-        context = ""
+        # Load and concatenate data sources
+        dfs = [AI_CACHE.get(key) for key in ["production_data", "efficiency_data", "chatbot_data"] if AI_CACHE.get(key) is not None]
+        data_available = dfs and all(not df.empty for df in dfs) if dfs else False
+        df = pd.concat(dfs, ignore_index=True) if data_available else None
 
         if df is not None and not df.empty:
-            line_match = re.search(r"(S\d+-\d+)", request.query.upper())
-            if line_match:
-                line_name = line_match.group(1)
-                matches = df[df["LineName"].str.upper() == line_name]
-                if not matches.empty:
-                    prod_sum = int(matches["ProdnPcs"].sum())
-                    avg_eff = matches["EffPer"].mean()
-                    context = (
-                        f"Production Data:\n"
-                        f"Line {line_name} → Total Production {prod_sum} pcs, "
-                        f"Average Efficiency {avg_eff:.1f}%.\n"
-                    )
-            else:
-                top_lines = (
-                    df.groupby("LineName")["ProdnPcs"]
-                    .sum()
-                    .sort_values(ascending=False)
-                    .head(5)
-                )
-                context = "Recent top lines production:\n" + "\n".join(
-                    [f"{ln}: {pcs} pcs" for ln, pcs in top_lines.items()]
-                )
+            df['TranDate'] = pd.to_datetime(df['TranDate'], errors='coerce')
 
-        base_prompt = f"User query: {request.query}\n\n{context}"
+        # Enhanced production query detection
+        production_keywords = [
+            r"\b(efficiency|line|part|operation|style|supervisor|production|target|actual|gap)\b",
+            r"S\d+-\d+",  # Line names like S1-1
+            r"\d{4}-\d{2}-\d{2}",  # Dates
+            r"\b(last month|yesterday|today)\b",
+            r"from \d{4}-\d{2}-\d{2} to \d{4}-\d{2}-\d{2}",
+        ]
+        is_production_query = any(re.search(pattern, request.query.lower()) for pattern in production_keywords)
+        logger.debug(f"Query: '{request.query}', is_production_query: {is_production_query}, data_available: {data_available}")
+
+        context = ""
+        if data_available and is_production_query:
+            # Summarize all data without filtering
+            if 'isFinOper' in df.columns:
+                df_fin = df[df["isFinOper"] == "Y"]
+            else:
+                df_fin = df
+
+            # Line summary
+            line_summary = df_fin.groupby("LineName").agg({
+                "ProdnPcs": "sum",
+                "Eff100": "mean",
+                "EffPer": "mean"
+            }).reset_index()
+            line_summary_str = "\n".join([
+                f"Line {row.LineName}: Total Production {int(row.ProdnPcs)} pcs, "
+                f"Target {int(row.Eff100)}, Efficiency {row.EffPer:.1f}%"
+                for _, row in line_summary.iterrows()
+            ])
+            context += f"Line Summary:\n{line_summary_str}\n\n"
+
+            # Part summary
+            part_summary = df_fin.groupby("PartName").agg({
+                "ProdnPcs": "sum",
+                "EffPer": "mean"
+            }).reset_index()
+            part_summary_str = "\n".join([
+                f"Part {row.PartName}: Total Production {int(row.ProdnPcs)} pcs, Efficiency {row.EffPer:.1f}%"
+                for _, row in part_summary.iterrows()
+            ])
+            context += f"Part Summary:\n{part_summary_str}\n\n"
+
+            # Operation summary
+            if 'NewOperSeq' in df_fin.columns:
+                oper_summary = df_fin.groupby("NewOperSeq").agg({
+                    "ProdnPcs": "sum",
+                    "EffPer": "mean"
+                }).reset_index()
+                oper_summary_str = "\n".join([
+                    f"Operation {row.NewOperSeq}: Total Production {int(row.ProdnPcs)} pcs, Efficiency {row.EffPer:.1f}%"
+                    for _, row in oper_summary.iterrows()
+                ])
+                context += f"Operation Summary:\n{oper_summary_str}\n\n"
+
+            # Supervisor summary
+            if 'Supervisor' in df_fin.columns:
+                sup_summary = df_fin.groupby("Supervisor").agg({
+                    "ProdnPcs": "sum",
+                    "EffPer": "mean"
+                }).reset_index()
+                sup_summary_str = "\n".join([
+                    f"Supervisor {row.Supervisor}: Total Production {int(row.ProdnPcs)} pcs, Efficiency {row.EffPer:.1f}%"
+                    for _, row in sup_summary.iterrows()
+                ])
+                context += f"Supervisor Summary:\n{sup_summary_str}\n\n"
+
+            # Date summary
+            if 'TranDate' in df_fin.columns:
+                date_summary = df_fin.groupby(df_fin['TranDate'].dt.date).agg({
+                    "ProdnPcs": "sum",
+                    "EffPer": "mean"
+                }).reset_index()
+                date_summary_str = "\n".join([
+                    f"Date {row.TranDate}: Total Production {int(row.ProdnPcs)} pcs, Efficiency {row.EffPer:.1f}%"
+                    for _, row in date_summary.iterrows()
+                ])
+                context += f"Date Summary:\n{date_summary_str}\n\n"
+
+        else:
+            context = "No production, efficiency, or chatbot data available."
+
+        # Prompt based on query type
+        best_practices = """
+Best Practices to Increase Production in Garment Industry:
+- Streamline production processes using lean manufacturing principles like 5S, Just-In-Time (JIT), and waste reduction.
+- Embrace sustainable practices: energy-efficient technologies, reduce wastage, responsible sourcing.
+- Invest in staff training and motivation: Happy workers are 12% more productive; use incentive schemes, proper training.
+- Implement automation and technology: Use auto machines, AI for quality control, predictive maintenance.
+- Optimize workflows and layout: Reduce movement, better line layout, continuous feeding, eliminate bottlenecks.
+- Conduct time studies, capacity studies, product studies to set realistic targets and reduce quality issues.
+- Employee engagement: Select right operators, use work aids, better movements.
+- Quality control: Establish strong standards to minimize defects.
+- Market expansion and collaboration: Collaborate with artisans, expand markets.
+- Cost optimization: Boost productivity, cut waste, improve efficiency.
+"""
+
+        if data_available and is_production_query:
+            business_logic = """
+You are an AI assistant specializing in garment production analysis. Use the provided context to answer queries about production data, focusing on efficiency metrics (ProdnPcs, Eff100, EffPer) by line, part, operation, supervisor, or date (TranDate). The data includes:
+- LineName (e.g., S1-1): Production lines.
+- PartName: Parts within a line, supervised by one or more supervisors.
+- StyleNo: Styles within a part, containing multiple operations (NewOperSeq).
+- isFinOper: 'Y' marks final operations, providing actual produced pieces (ProdnPcs), target (Eff100), and efficiency percentage (EffPer).
+- TranDate: Date of the data entry.
+
+Filter the data in the context based on the user's query (e.g., specific LineName, PartName, NewOperSeq, TranDate, or date ranges like 'yesterday', 'last month', or 'from YYYY-MM-DD to YYYY-MM-DD'). Provide concise, data-driven answers with proper spacing and formatting. Avoid generic greetings unless the query is conversational. If no specific data matches, use aggregated summaries or indicate no data is available. For efficiency trend predictions, analyze patterns in EffPer over time (TranDate) and suggest future trends based on historical data. Examples:
+- "Efficiency for S1-1 on 2025-09-20": Provide data for S1-1 on that date.
+- "Part-wise efficiency last month": Summarize by PartName for the last month.
+- "Operation 123 efficiency": Filter by NewOperSeq 123.
+- "Efficiency trend for S1-1": Analyze EffPer over time and predict future trends.
+
+When relevant, include best practices to improve production and efficiency:
+""" + best_practices
+
+            base_prompt = business_logic + f"\n\nUser query: {request.query}\n\nContext:\n{context}"
+        else:
+            # Conversational prompt for non-production queries or no data
+            base_prompt = (
+                f"You are a friendly, conversational AI assistant. Respond to the user's query in a clear, natural, and engaging manner. "
+                f"Avoid technical jargon unless requested. If no production data is available or the query is unrelated to production, provide a general response. "
+                f"Ensure proper spacing between words. "
+                f"User query: {request.query}"
+            )
+
+        logger.debug(f"Ultra chatbot prompt: {base_prompt}")
 
         async def response_stream():
-            yield '{"status":"success","answer":"'
             async for frag in ollama_client.stream_chat(
-                model="llama3.2:3b",
+                model="mistral:latest",
                 messages=[{"role": "user", "content": base_prompt}],
-                options={"session": AI_CACHE.get("chatbot_session"), "persist": True},
+                options={"session": AI_CACHE.get("chatbot_session"), "persist": True, "temperature": 0.7, "top_p": 0.9},
             ):
-                frag_esc = (
-                    frag.replace("\\", "\\\\")
-                        .replace('"', '\\"')
-                        .replace("\n", "\\n")
-                )
-                yield frag_esc
-            yield '"}'
+                if frag:
+                    logger.debug(f"Streaming fragment: '{frag}'")
+                    yield frag  # Preserve original spacing
 
-        return StreamingResponse(response_stream(), media_type="application/json")
+        return StreamingResponse(response_stream(), media_type="text/plain")
 
     except Exception as e:
         logger.error(f"Ultra chatbot failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Chatbot error")
-
 
 if __name__ == "__main__":
     logger.info("🚀 Starting Fabric Pulse AI Backend...")

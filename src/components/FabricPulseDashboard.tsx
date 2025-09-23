@@ -1134,7 +1134,7 @@ const FabricPulseDashboard = () => {
             </h1>
             <p className="text-xs sm:text-sm lg:text-base text-muted-foreground flex items-center gap-2">
               <Database className="h-4 w-4" />
-              Powered By Llama 3.2b AI
+              Powered By Mistral AI
             </p>
           </div>
         </div>
