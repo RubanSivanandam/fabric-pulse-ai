@@ -1,3 +1,15 @@
+"""
+WhatsApp service (refactored)
+Implements: hourly supervisor alerts for final-operation parts (ISFinOper='Y')
+Sends only when part-efficiency < threshold (default 85%).
+Keeps same public API used by fabric_pulse_ai_main.py:
+    - fetch_flagged_employees
+    - fetch_supervisors
+    - generate_and_send_reports(test_mode: bool = False)
+Fetches actual supervisor names via JOIN and transforms PartName for 'Assembly tops'.
+Sends one message to test numbers in test mode.
+"""
+
 import logging
 import json
 import io
@@ -31,7 +43,10 @@ from config import config
 logger = logging.getLogger(__name__)
 
 # Default test numbers
-DEFAULT_TEST_NUMBERS = ["+919943625493", "+918939990949"]
+DEFAULT_TEST_NUMBERS = ["+919943625493", "+918939990949", "+919894070745"]
+
+# Twilio template SID (replace with your actual approved template SID)
+TEMPLATE_SID = "HX36528850116a46b1a54bf5f81be5f25a"  # Update with your actual content_sid
 
 @dataclass
 class SupervisorRow:
@@ -51,7 +66,7 @@ class ProductionReadyWhatsAppService:
       - Fetches part-level aggregated production for final operations (ISFinOper='Y')
       - Joins with RTMS_SupervisorsDetl to get actual supervisor names
       - Sends WhatsApp if efficiency < threshold (config.alerts.efficiency_threshold)
-      - test_mode forces sending to DEFAULT_TEST_NUMBERS if no supervisor phone
+      - test_mode sends one message to DEFAULT_TEST_NUMBERS
       - Saves messages as .txt for verification
       - Transforms PartName 'Assembly tops' to 'Assembly'
     """
@@ -155,7 +170,7 @@ class ProductionReadyWhatsAppService:
             logger.error(f"fetch_supervisors failed: {e}")
             return []
 
-    async def _query_part_efficiencies(self, unit_code: Optional[str] = None) -> List[SupervisorRow]:
+    async def _query_part_efficiencies(self) -> List[SupervisorRow]:
         """Query DB to aggregate production and fetch supervisor details"""
         try:
             from fabric_pulse_ai_main import rtms_engine
@@ -173,21 +188,17 @@ class ProductionReadyWhatsAppService:
                     B.SupervisorName,
                     B.PhoneNumber
                 FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction] A
-                LEFT JOIN [ITR_PRO_IND].[dbo].[RTMS_SupervisorsDetl] B
+                JOIN [ITR_PRO_IND].[dbo].[RTMS_SupervisorsDetl] B
                     ON A.LineName = B.LineName
                     AND A.PartName = B.PartName
                     AND A.FloorName = B.FloorName
                 WHERE CAST(A.TranDate AS DATE) = CAST(GETDATE() AS DATE)
                 AND A.ISFinOper = :is_fin_oper
-            """
-            params = {"is_fin_oper": "Y"}
-            if unit_code:
-                query += " AND A.UnitCode = :unit_code"
-                params["unit_code"] = unit_code
-            query += """
+                AND A.UnitCode = :unit_code
                 GROUP BY A.UnitCode, A.FloorName, A.LineName, A.PartName, B.SupervisorName, B.PhoneNumber
                 ORDER BY A.UnitCode, A.FloorName, A.LineName, A.PartName
             """
+            params = {"is_fin_oper": "Y", "unit_code": "D15-2"}
             with rtms_engine.engine.connect() as conn:
                 try:
                     df = pd.read_sql(text(query), conn, params=params)
@@ -224,7 +235,7 @@ class ProductionReadyWhatsAppService:
                         eff_per=round(eff, 2),
                     )
                 )
-            logger.info(f"Aggregated {len(rows)} part-level rows (ISFinOper='Y') with supervisor details")
+            logger.info(f"Aggregated {len(rows)} part-level rows (ISFinOper='Y', UnitCode='D15-2') with supervisor details")
             return rows
         except Exception as e:
             logger.error(f"_query_part_efficiencies failed: {e}", exc_info=True)
@@ -242,8 +253,8 @@ class ProductionReadyWhatsAppService:
         )
         return message
 
-    async def send_whatsapp_report(self, phone_number: str, message: str, pdf_path: Optional[str] = None, csv_path: Optional[str] = None) -> Dict[str, Any]:
-        """Sends WhatsApp message and saves as .txt for verification"""
+    async def send_whatsapp_report(self, phone_number: str, message: str, pdf_path: Optional[str] = None, csv_path: Optional[str] = None, row: Optional[SupervisorRow] = None) -> Dict[str, Any]:
+        """Sends WhatsApp message using template and saves as .txt for verification"""
         try:
             if not phone_number.startswith("+"):
                 phone_number = f"+91{phone_number}"
@@ -265,16 +276,27 @@ class ProductionReadyWhatsAppService:
                 logger.info(f"[MOCK SEND] logged to {mock_json_file}")
                 return {"status": "mocked", "file": str(mock_txt_file)}
             else:
-                from_whatsapp = self.config.twilio.whatsapp_number if hasattr(self.config, "twilio") else None
+                from_whatsapp = self.config.twilio.whatsapp_number if hasattr(self.config, "twilio") else "whatsapp:+14155238886"
                 if not from_whatsapp:
                     logger.error("Twilio FROM (whatsapp number) not configured")
                     return {"status": "error", "reason": "twilio_from_not_configured"}
                 to_addr = f"whatsapp:{phone_number}"
                 from_addr = from_whatsapp if from_whatsapp.startswith("whatsapp:") else f"whatsapp:{from_whatsapp}"
+                content_variables = {
+                    "1": row.supervisor_name if row else "Unknown Supervisor",
+                    "2": "Assembly" if row and "assembly tops" in row.part_name.lower() else (row.part_name if row else ""),
+                    "3": row.unit_code if row else "",
+                    "4": row.floor_name if row else "",
+                    "5": row.line_name if row else "",
+                    "6": str(row.prodn_pcs) if row else "0",
+                    "7": str(row.eff100) if row else "0",
+                    "8": f"{row.eff_per:.1f}" if row else "0.0"
+                }
                 msg = self.twilio_client.messages.create(
-                    body=message,
                     from_=from_addr,
                     to=to_addr,
+                    content_sid=TEMPLATE_SID,
+                    content_variables=json.dumps(content_variables)
                 )
                 logger.info(f"WhatsApp sent SID={getattr(msg, 'sid', None)} to {phone_number}")
                 return {"status": "sent", "sid": getattr(msg, 'sid', None), "mock_file": str(mock_txt_file)}
@@ -342,36 +364,20 @@ class ProductionReadyWhatsAppService:
         """Main method to generate and send reports"""
         timestamp = datetime.now()
         try:
-            # Try with UnitCode='D15-2' first, then without if it fails
-            part_rows = await self._query_part_efficiencies(unit_code="D15-2")
+            part_rows = await self._query_part_efficiencies()
             if not part_rows:
-                logger.info("No final-operation part rows for UnitCode='D15-2', trying without filter")
-                part_rows = await self._query_part_efficiencies()
-            if not part_rows:
-                logger.info("No final-operation part rows for today")
-                return {"status": "success", "message": "No final-operation production rows found", "timestamp": timestamp.isoformat()}
+                logger.info("No final-operation part rows for UnitCode='D15-2'")
+                return {"status": "success", "message": "No final-operation production rows found for UnitCode='D15-2'", "timestamp": timestamp.isoformat()}
 
-            deliveries = []
+            # In test mode, select only the first row for sending one message
+            selected_row = None
             for r in part_rows:
-                if r.eff_per >= self.threshold:
-                    logger.debug(f"Skipping part ({r.unit_code}, {r.floor_name}, {r.line_name}, {r.part_name}) as efficiency {r.eff_per:.1f}% >= threshold {self.threshold}")
-                    continue
-                if r.supervisor_name == "Unknown Supervisor" and not r.phone_number:
-                    if test_mode:
-                        for t in self.test_numbers:
-                            deliveries.append({"phone": t, "name": "TEST_SUPERVISOR", "part_row": r})
-                    else:
-                        fallback = getattr(self.config.twilio, "alert_phone_number", None) if hasattr(self.config, "twilio") else None
-                        if fallback:
-                            deliveries.append({"phone": fallback.replace("whatsapp:", "").replace(" ", ""), "name": "FALLBACK", "part_row": r})
-                        else:
-                            logger.warning(f"No supervisor mapped for ({r.unit_code}, {r.floor_name}, {r.line_name}, {r.part_name}); skipping")
-                else:
-                    deliveries.append({"phone": r.phone_number, "name": r.supervisor_name, "part_row": r})
-
-            if not deliveries:
-                logger.info("No deliveries (all parts >= threshold or no supervisors found)")
-                return {"status": "success", "message": "No alerts to send (all parts ok or no supervisors found)", "timestamp": timestamp.isoformat()}
+                if r.eff_per < self.threshold:
+                    selected_row = r
+                    break
+            if not selected_row:
+                logger.info("No parts with efficiency < threshold")
+                return {"status": "success", "message": "No parts with efficiency below threshold", "timestamp": timestamp.isoformat()}
 
             pdf_bytes = self.generate_pdf_report(part_rows, timestamp)
             pdf_path = self.reports_dir / f"hourly_report_{timestamp.strftime('%Y%m%d_%H%M')}.pdf"
@@ -380,24 +386,39 @@ class ProductionReadyWhatsAppService:
             csv_path = self.generate_csv_report(part_rows, timestamp)
 
             results = []
-            for d in deliveries:
-                phone = d["phone"]
-                name = d["name"]
-                row = d["part_row"]
+            if test_mode:
+                # Send one message to both test numbers using the first eligible row
                 message = self._format_supervisor_message(
-                    sup_name=name,
-                    unit=row.unit_code,
-                    floor=row.floor_name,
-                    line=row.line_name,
-                    part=row.part_name,
-                    prodn=row.prodn_pcs,
-                    eff100=row.eff100,
-                    eff_per=row.eff_per
+                    sup_name=selected_row.supervisor_name,
+                    unit=selected_row.unit_code,
+                    floor=selected_row.floor_name,
+                    line=selected_row.line_name,
+                    part=selected_row.part_name,
+                    prodn=selected_row.prodn_pcs,
+                    eff100=selected_row.eff100,
+                    eff_per=selected_row.eff_per
                 )
-                recipients = self.test_numbers if test_mode and (row.supervisor_name == "Unknown Supervisor" or not row.phone_number) else [phone]
-                for rec in recipients:
-                    res = await self.send_whatsapp_report(rec, message, pdf_path=str(pdf_path), csv_path=csv_path)
-                    results.append({"to": rec, "result": res})
+                for phone in self.test_numbers:
+                    res = await self.send_whatsapp_report(phone, message, pdf_path=str(pdf_path), csv_path=csv_path, row=selected_row)
+                    results.append({"to": phone, "result": res})
+            else:
+                # Normal mode: send to actual supervisor phone numbers
+                for r in part_rows:
+                    if r.eff_per >= self.threshold:
+                        logger.debug(f"Skipping part ({r.unit_code}, {r.floor_name}, {r.line_name}, {r.part_name}) as efficiency {r.eff_per:.1f}% >= threshold {self.threshold}")
+                        continue
+                    message = self._format_supervisor_message(
+                        sup_name=r.supervisor_name,
+                        unit=r.unit_code,
+                        floor=r.floor_name,
+                        line=r.line_name,
+                        part=r.part_name,
+                        prodn=r.prodn_pcs,
+                        eff100=r.eff100,
+                        eff_per=r.eff_per
+                    )
+                    res = await self.send_whatsapp_report(r.phone_number, message, pdf_path=str(pdf_path), csv_path=csv_path, row=r)
+                    results.append({"to": r.phone_number, "result": res})
 
             logger.info(f"Completed sends: {len(results)} items")
             return {
