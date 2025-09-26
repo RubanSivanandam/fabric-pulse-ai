@@ -39,7 +39,7 @@ if not logger.handlers:
 # Default test numbers
 DEFAULT_TEST_NUMBERS = ["+919943625493", "+918939990949", "+919894070745"]
 
-TEMPLATE_SID = ""  # Twilio template SID if using templated sends
+TEMPLATE_SID = "HX059c8f6500786c9f43eda250ef7178e1"  # Twilio template SID if using templated sends
 
 @dataclass
 class SupervisorRow:
@@ -481,7 +481,8 @@ class ProductionReadyWhatsAppService:
             except Exception as e:
                 logger.error(f"Scheduler job failed: {e}")
 
-        schedule.every().hour.at(":00").do(job)
+         # ⏰ run every hour
+            schedule.every().hour.at(":00").do(job)
 
         def run_schedule():
             logger.info("✅ Hourly scheduler started (SP only).")

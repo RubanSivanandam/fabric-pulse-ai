@@ -2445,11 +2445,18 @@ Remember: Be concise, professional, and focused on real-time production improvem
         raise HTTPException(status_code=500, detail="Chatbot error")
 
 if __name__ == "__main__":
-    logger.info("🚀 Starting Fabric Pulse AI Backend...")
+    # ✅ Start WhatsApp scheduler (5 min interval, auto WhatsApp trigger)
+    try:
+        whatsapp_service.start_hourly_scheduler()
+        logger.info("✅ WhatsApp scheduler started (5-minute interval)")
+    except Exception as e:
+        logger.error(f"❌ Failed to start WhatsApp scheduler: {e}")
+
+    logger.info("🚀 Starting Unified Fabric Pulse AI Backend (with aliases)...")
     uvicorn.run(
-        "fabric_pulse_ai_main:app",
+        "main:app",
         host="0.0.0.0",
         port=8000,
         reload=False,
-        log_level="info"
+        log_level="info",
     )
