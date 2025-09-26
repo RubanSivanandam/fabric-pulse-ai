@@ -36,10 +36,9 @@ if not logger.handlers:
     ch.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(ch)
 
-# Default test numbers
-DEFAULT_TEST_NUMBERS = ["+919943625493", "+918939990949", "+919894070745"]
+DEFAULT_TEST_NUMBERS = ["+919943625493", "+918939990949"]
+TEMPLATE_SID = "HX059c8f6500786c9f43eda250ef7178e1"  # Twilio template SID
 
-TEMPLATE_SID = "HX059c8f6500786c9f43eda250ef7178e1"  # Twilio template SID if using templated sends
 
 @dataclass
 class SupervisorRow:
@@ -96,22 +95,26 @@ class ProductionReadyWhatsAppService:
         self.db2_engine = _make_db2_engine_from_env()
 
     # ----------------------------------------------------------------------
-    # Stored Procedure (DB1)
+    # Execute stored procedure (DB1)
     # ----------------------------------------------------------------------
     def execute_stored_proc(self):
+        """Run sync stored procedure before querying DB1"""
         try:
             from fabric_pulse_ai_main import rtms_engine
             if not rtms_engine or not rtms_engine.engine:
                 logger.error("DB1 engine not available for stored procedure.")
                 return
+
+            query = "EXEC dbo.usp_Sync_RTMS_SessionWiseProduction @TranDate = CAST(GETDATE() AS DATE)"
             with rtms_engine.engine.begin() as conn:
-                conn.execute(text("EXEC dbo.usp_Sync_RTMS_SessionWiseProduction @TranDate = CAST(GETDATE() AS DATE)"))
-            logger.info("Stored procedure executed successfully on DB1.")
+                conn.execute(text(query))
+
+            logger.info("✅ Stored procedure executed successfully on DB1.")
         except Exception as e:
             logger.error(f"execute_stored_proc failed: {e}", exc_info=True)
 
     # ----------------------------------------------------------------------
-    # Inline CTE Query (DB1)
+    # Inline Query (DB1)
     # ----------------------------------------------------------------------
     async def _query_part_efficiencies(self) -> List[SupervisorRow]:
         try:
@@ -119,6 +122,10 @@ class ProductionReadyWhatsAppService:
             if not rtms_engine or not rtms_engine.engine:
                 logger.error("DB1 engine not available for production query")
                 return []
+
+            # 🔹 Run stored procedure first
+            self.execute_stored_proc()
+
             sql = """
             ;WITH OperationDetails AS (
                 SELECT
@@ -230,7 +237,6 @@ class ProductionReadyWhatsAppService:
             AND OD.PartName = ST.PartName
             AND OD.ReptType = ST.ReptType
             ORDER BY OD.LineName, OD.PartSeq;
-
             """
             with rtms_engine.engine.connect() as conn:
                 df = pd.read_sql(text(sql), conn)
@@ -291,7 +297,6 @@ class ProductionReadyWhatsAppService:
         display_part = "Assembly" if "assembly tops" in r.part_name.lower() else r.part_name
         session_line = f"Upto the session {session_code}" if session_code else "Upto the session"
         return (
-            "Actual:\n"
             f"Supervisor: {r.supervisor_name}\n"
             f"Part: {display_part} | Location: {r.unit_code} → {r.floor_name or 'FLOOR-?'} → {r.line_name}\n"
             f"Produced: {r.prodn_pcs} pcs / Target: {r.target_pcs} pcs\n"
@@ -301,31 +306,28 @@ class ProductionReadyWhatsAppService:
         )
 
     # ----------------------------------------------------------------------
-    # Send WhatsApp (mock + Twilio if configured)
+    # Send WhatsApp
     # ----------------------------------------------------------------------
     async def send_whatsapp_report(
         self,
         phone_number: str,
         message: str,
-        pdf_path: Optional[str] = None,
-        csv_path: Optional[str] = None,
         row: Optional[SupervisorRow] = None,
+        session_code: Optional[str] = None,
         save_artifacts: bool = False
     ) -> Dict[str, Any]:
         try:
             if not phone_number.startswith("+"):
                 phone_number = f"+91{phone_number}"
+
             mock_txt_file = self.mock_dir / f"mock_message_{phone_number.replace('+','')}_{int(time.time())}.txt"
             with open(mock_txt_file, "w", encoding="utf-8") as f:
                 f.write(f"To: {phone_number}\n\n{message}")
 
-            # only save .json mock if save_artifacts=True
             if save_artifacts:
                 payload = {
                     "to": phone_number,
                     "body": message,
-                    "pdf": pdf_path,
-                    "csv": csv_path,
                     "sent_at": datetime.now().isoformat()
                 }
                 mock_json_file = self.mock_dir / f"mock_{phone_number.replace('+','')}_{int(time.time())}.json"
@@ -337,173 +339,43 @@ class ProductionReadyWhatsAppService:
             ):
                 return {"status": "mocked", "file": str(mock_txt_file)}
 
-            from_whatsapp = (
-                self.config.twilio.whatsapp_number
-                if hasattr(self.config, "twilio")
-                else None
-            )
+            if row is None:
+                raise ValueError("row must be provided when sending template message")
+
+            from_whatsapp = self.config.twilio.whatsapp_number
             to_addr = f"whatsapp:{phone_number}"
             from_addr = from_whatsapp if str(from_whatsapp).startswith("whatsapp:") else f"whatsapp:{from_whatsapp}"
 
-            msg = self.twilio_client.messages.create(from_=from_addr, to=to_addr, body=message)
+            # ✅ FIX: flat JSON (no "variables" wrapper)
+            msg = self.twilio_client.messages.create(
+                from_=from_addr,
+                to=to_addr,
+                content_sid=TEMPLATE_SID,
+                content_variables=json.dumps({
+                    "1": row.supervisor_name,
+                    "2": row.part_name,
+                    "3": row.unit_code,
+                    "4": row.floor_name or "FLOOR-?",
+                    "5": row.line_name,
+                    "6": str(row.prodn_pcs),
+                    "7": str(row.target_pcs),
+                    "8": str(round(row.achv_percent, 1)),
+                    "9": session_code or ""
+                })
+            )
+
             return {"status": "sent", "sid": getattr(msg, 'sid', None), "mock_file": str(mock_txt_file)}
+
         except Exception as e:
             logger.error(f"send_whatsapp_report failed: {e}", exc_info=True)
             return {"status": "error", "reason": str(e)}
 
     # ----------------------------------------------------------------------
-    # Main send cycle
+    # Scheduler
     # ----------------------------------------------------------------------
-    async def generate_and_send_reports(self, test_mode: bool = False, save_artifacts: bool = False) -> Dict[str, Any]:
-        timestamp = datetime.now()
-        try:
-            part_rows = await self._query_part_efficiencies()
-            if not part_rows:
-                return {"status": "success", "message": "No data", "timestamp": timestamp.isoformat()}
-
-            pdf_path, csv_path = None, None
-            if save_artifacts:
-                pdf_bytes = self.generate_pdf_report(part_rows, timestamp)
-                pdf_path = self.reports_dir / f"hourly_report_{timestamp.strftime('%Y%m%d_%H%M')}.pdf"
-                with open(pdf_path, "wb") as f:
-                    f.write(pdf_bytes)
-                csv_path = self.generate_csv_report(part_rows, timestamp)
-
-            session_code = self.get_session_code()
-
-            results = []
-            first_msg, first_row = None, None
-
-            if test_mode:
-                r = part_rows[0]
-                msg = self._format_supervisor_message(r, session_code)
-                for phone in self.test_numbers:
-                    res = await self.send_whatsapp_report(
-                        phone, msg, pdf_path=str(pdf_path) if pdf_path else None,
-                        csv_path=csv_path, row=r, save_artifacts=save_artifacts
-                    )
-                    results.append({"to": phone, "result": res})
-            else:
-                # ✅ Restrict automatic scheduler to only the first supervisor list (for testing)
-                allowed_numbers = ["+919943625493", "+918939990949"]
-
-                if part_rows:
-                    r = part_rows[0]  # send only first supervisor row data
-                    msg = self._format_supervisor_message(r, session_code)
-                    for to in allowed_numbers:
-                        res = await self.send_whatsapp_report(
-                            to, msg, pdf_path=str(pdf_path) if pdf_path else None,
-                            csv_path=csv_path, row=r, save_artifacts=save_artifacts
-                        )
-                        results.append({"to": to, "result": res})
-
-                    if first_msg is None:
-                        first_msg, first_row = msg, r
-
-                if first_msg and first_row:
-                    for t in self.test_numbers:
-                        res_t = await self.send_whatsapp_report(
-                            t, first_msg, pdf_path=str(pdf_path) if pdf_path else None,
-                            csv_path=csv_path, row=first_row, save_artifacts=save_artifacts
-                        )
-                        results.append({"to": t, "result": res_t, "reason": "duplicate_for_test"})
-
-            return {
-                "status": "success",
-                "timestamp": timestamp.isoformat(),
-                "attempted_sends": len(results),
-                "send_results": results,
-                "pdf": str(pdf_path) if pdf_path else None,
-                "csv": csv_path,
-            }
-        except Exception as e:
-            logger.error(f"Report generation failed: {e}", exc_info=True)
-            return {"status": "error", "message": str(e), "timestamp": timestamp.isoformat()}
-
-
-    # ----------------------------------------------------------------------
-    # PDF / CSV generation
-    # ----------------------------------------------------------------------
-    def generate_pdf_report(self, line_data: List[SupervisorRow], timestamp: datetime) -> bytes:
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4)
-        styles = getSampleStyleSheet()
-        story = []
-        story.append(Paragraph("Hourly Production - Part Summary", styles["Heading2"]))
-        story.append(Spacer(1, 8))
-        table_data = [["Unit", "Line", "Part", "Supervisor", "Produced", "Target", "Eff%"]]
-        for r in line_data:
-            display_part = "Assembly" if "assembly tops" in r.part_name.lower() else r.part_name
-            table_data.append([r.unit_code, r.line_name, display_part, r.supervisor_name,
-                               str(r.prodn_pcs), str(r.target_pcs), f"{r.achv_percent:.1f}%"])
-        table = Table(table_data, colWidths=[50, 80, 120, 120, 60, 60, 50])
-        table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2D6A9F")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ]))
-        story.append(table)
-        doc.build(story)
-        pdf_bytes = buffer.getvalue()
-        buffer.close()
-        return pdf_bytes
-
-    def generate_csv_report(self, line_data: List[SupervisorRow], timestamp: datetime) -> Optional[str]:
-        try:
-            csv_path = self.reports_dir / f"hourly_parts_{timestamp.strftime('%Y%m%d_%H%M')}.csv"
-            rows = []
-            for r in line_data:
-                display_part = "Assembly" if "assembly tops" in r.part_name.lower() else r.part_name
-                rows.append({
-                    "Unit": r.unit_code,
-                    "Line": r.line_name,
-                    "Part": display_part,
-                    "Supervisor": r.supervisor_name,
-                    "Produced": r.prodn_pcs,
-                    "Target": r.target_pcs,
-                    "Eff%": f"{r.achv_percent:.1f}"
-                })
-            if rows:
-                df = pd.DataFrame(rows)
-                df.to_csv(csv_path, index=False)
-                return str(csv_path)
-            return None
-        except Exception as e:
-            logger.error(f"generate_csv_report failed: {e}")
-            return None
-
-    # ----------------------------------------------------------------------
-    # Scheduler and Watcher
-    # ----------------------------------------------------------------------
-    def start_hourly_scheduler(self):
-        def job():
-            try:
-                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                logger.info(f"[Scheduler] Triggered WhatsApp cycle at {now}")
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(
-                    self.generate_and_send_reports(test_mode=False, save_artifacts=False)
-                )
-                loop.close()
-            except Exception as e:
-                logger.error(f"Scheduler job failed: {e}", exc_info=True)
-
-    # ⏱️ Every 5 minutes
-            schedule.every(5).minutes.do(job)
-
-    def run_schedule():
-        logger.info("✅ WhatsApp scheduler started (every 5 minutes)")
-        while True:
-            schedule.run_pending()
-            time.sleep(1)
-
-    t = threading.Thread(target=run_schedule, daemon=True)
-    t.start()
     def start_scheduler(self):
         """Start background scheduler to send WhatsApp every 5 minutes"""
+
         def job():
             try:
                 now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -515,7 +387,6 @@ class ProductionReadyWhatsAppService:
             except Exception as e:
                 logger.error(f"Scheduler job failed: {e}", exc_info=True)
 
-        # Run every 5 minutes
         schedule.every(5).minutes.do(job)
 
         def run_schedule():
@@ -526,29 +397,27 @@ class ProductionReadyWhatsAppService:
 
         threading.Thread(target=run_schedule, daemon=True).start()
 
-    async def run_report_cycle(self):
-        """Execute stored procedure and send WhatsApp report"""
-        self.execute_stored_proc()
-        rows = await self._query_part_efficiencies()
-        session_code = self.get_session_code()
+        async def run_report_cycle(self):
+            try:
+                rows = await self._query_part_efficiencies()
+                session_code = self.get_session_code()
 
-        for r in rows:
-            msg = self._format_supervisor_message(r, session_code)
-            await self.send_whatsapp_report(r.phone_number, msg)
+                # Always send to supervisors + these test numbers
+                extra_test_numbers = ["+919943625493", "+918939990949", "+919894070745"]
 
+                for r in rows:
+                    msg = self._format_supervisor_message(r, session_code)
 
-# Export instance
+                    # 1️⃣ Send to supervisor’s actual number (if exists)
+                    if r.phone_number:
+                        await self.send_whatsapp_report(r.phone_number, msg, row=r, session_code=session_code)
+
+                    # 2️⃣ Also send to test numbers
+                    for test_num in extra_test_numbers:
+                        await self.send_whatsapp_report(test_num, msg, row=r, session_code=session_code)
+
+            except Exception as e:
+                logger.error(f"run_report_cycle failed: {e}", exc_info=True)
+
+# Export singleton
 whatsapp_service = ProductionReadyWhatsAppService()
-
-
-# # DB2 watcher
-# def _on_totime_change():
-#     try:
-#         loop = asyncio.new_event_loop()
-#         asyncio.set_event_loop(loop)
-#         loop.run_until_complete(whatsapp_service.generate_and_send_reports(test_mode=False))
-#         loop.close()
-#     except Exception as e:
-#         logger.error(f"Watcher callback failed: {e}", exc_info=True)
-
-# whatsapp_service.start_session_monitor(_on_totime_change)
