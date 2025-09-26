@@ -103,7 +103,7 @@ app.post("/api/ai/ultra_chatbot")(ultra_advanced_ai_chatbot)  # New chatbot endp
 
 def start_scheduler():
     try:
-        whatsapp_service.start_hourly_scheduler()
+        whatsapp_service.start_scheduler()
         print("✅ WhatsApp scheduler started (5-minute interval)")
     except Exception as e:
         print(f"❌ Failed to start WhatsApp scheduler: {e}")
