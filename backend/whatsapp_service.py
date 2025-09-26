@@ -506,9 +506,12 @@ class ProductionReadyWhatsAppService:
         """Start background scheduler to send WhatsApp every 5 minutes"""
         def job():
             try:
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                logger.info(f"[Scheduler] Triggered WhatsApp cycle at {now}")
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 loop.run_until_complete(self.run_report_cycle())
+                loop.close()
             except Exception as e:
                 logger.error(f"Scheduler job failed: {e}", exc_info=True)
 
@@ -516,21 +519,23 @@ class ProductionReadyWhatsAppService:
         schedule.every(5).minutes.do(job)
 
         def run_schedule():
+            logger.info("✅ WhatsApp scheduler started (every 5 minutes)")
             while True:
                 schedule.run_pending()
                 time.sleep(1)
 
         threading.Thread(target=run_schedule, daemon=True).start()
-        logger.info("✅ WhatsApp scheduler started (every 5 minutes)")
 
-async def run_report_cycle(self):
+    async def run_report_cycle(self):
         """Execute stored procedure and send WhatsApp report"""
         self.execute_stored_proc()
         rows = await self._query_part_efficiencies()
         session_code = self.get_session_code()
+
         for r in rows:
             msg = self._format_supervisor_message(r, session_code)
             await self.send_whatsapp_report(r.phone_number, msg)
+
 
 # Export instance
 whatsapp_service = ProductionReadyWhatsAppService()
