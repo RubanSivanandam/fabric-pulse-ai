@@ -502,7 +502,7 @@ class ProductionReadyWhatsAppService:
 
     t = threading.Thread(target=run_schedule, daemon=True)
     t.start()
-def start_scheduler(self):
+    def start_scheduler(self):
         """Start background scheduler to send WhatsApp every 5 minutes"""
         def job():
             try:
@@ -534,7 +534,7 @@ async def run_report_cycle(self):
 
 # Export instance
 whatsapp_service = ProductionReadyWhatsAppService()
-whatsapp_service.start_scheduler()
+
 
 # # DB2 watcher
 # def _on_totime_change():
