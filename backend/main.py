@@ -18,6 +18,7 @@ from fabric_pulse_ai_main import (
     cache_status,
     generate_hourly_report,
     generate_pdf_report_api,
+    get_parts,
     predict_efficiency,
     refresh_ai_cache,
     rtms_engine,
@@ -83,6 +84,7 @@ app.get("/api/rtms/filters/units")(get_unit_codes)
 app.get("/api/rtms/filters/floors")(get_floor_names)
 app.get("/api/rtms/filters/lines")(get_line_names)
 app.get("/api/rtms/filters/operations")(get_operations)
+app.get("/api/rtms/filters/parts")(get_parts)
 app.get("/api/rtms/analyze")(analyze_production_data)
 app.get("/api/rtms/efficiency")(get_operator_efficiencies)
 app.get("/api/ai/generate_hourly_report")(generate_hourly_report)

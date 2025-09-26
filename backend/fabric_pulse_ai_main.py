@@ -510,6 +510,7 @@ class EnhancedRTMSEngine:
         floor_name: Optional[str] = None,
         line_name: Optional[str] = None,
         operation: Optional[str] = None,
+        part_name: Optional[str] = None,
         limit: int = 1000
     ) -> List[RTMSProductionData]:
         """Fetch production data with optional filtering - FIXED DATE QUERY"""
@@ -549,6 +550,9 @@ class EnhancedRTMSEngine:
             if operation:
                 query += " AND [NewOperSeq] = @operation"
                 params["operation"] = operation
+            if part_name:
+                query += " AND [PartName] = @part_name"
+                params["part_name"] = part_name
             
             query += " ORDER BY [TranDate] DESC"
             
@@ -1236,6 +1240,33 @@ async def get_operations(unit_code: str = Query(None), floor_name: str = Query(N
         logger.error(f"Failed to fetch operations: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch operations")
 
+@router.get("/api/rtms/filters/parts")
+async def get_parts(
+    unit_code: str = Query(...),
+    floor_name: str = Query(...),
+    line_name: str = Query(...)
+):
+    try:
+        query = text("""
+            SELECT DISTINCT [PartName]
+            FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
+            WHERE [UnitCode] = :unit_code
+              AND [FloorName] = :floor_name
+              AND [LineName] = :line_name
+              AND [PartName] IS NOT NULL AND [PartName] != ''
+            ORDER BY [PartName]
+        """)
+        with rtms_engine.engine.connect() as connection:
+            df = pd.read_sql(query, connection, params={
+                "unit_code": unit_code,
+                "floor_name": floor_name,
+                "line_name": line_name
+            })
+        return {"status": "success", "data": df['PartName'].tolist()}
+    except Exception as e:
+        logger.error(f"Failed to fetch parts: {e}")
+        return {"status": "error", "data": [], "message": str(e)}
+
 # FIXED: Added missing analyze endpoint that frontend expects
 @app.get("/api/rtms/analyze")
 async def analyze_production_data(
@@ -1279,6 +1310,7 @@ async def get_operator_efficiencies(
     floor_name: Optional[str] = Query(None),
     line_name: Optional[str] = Query(None),
     operation: Optional[str] = Query(None),
+    part_name: Optional[str] = Query(None),
     limit: int = Query(1000, ge=1, le=5000)
 ):
     """Get operator efficiency analysis with AI insights"""
@@ -1289,6 +1321,7 @@ async def get_operator_efficiencies(
             floor_name=floor_name,
             line_name=line_name,
             operation=operation,
+            part_name=part_name,
             limit=limit
         )
         
@@ -1308,6 +1341,44 @@ async def get_operator_efficiencies(
     except Exception as e:
         logger.error(f"Failed to get operator efficiencies: {e}")
         raise HTTPException(status_code=500, detail="Failed to get operator efficiencies")
+@router.get("/api/rtms/flagged")
+async def get_flagged_employees(
+    unit_code: Optional[str] = Query(None),
+    floor_name: Optional[str] = Query(None),
+    line_name: Optional[str] = Query(None),
+    part_name: Optional[str] = Query(None)
+):
+    try:
+        query = """
+            SELECT EmpName, EmpCode, UnitCode, FloorName, LineName, StyleNo,
+                   PartName, Operation, NewOperSeq, ProdnPcs, Eff100, EffPer, IsRedFlag
+            FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
+            WHERE CAST(TranDate AS DATE) = CAST(GETDATE() AS DATE)
+              AND IsRedFlag = 1
+              AND EmpName IS NOT NULL
+              AND LineName IS NOT NULL
+        """
+        params = {}
+        if unit_code:
+            query += " AND UnitCode = @unit_code"
+            params["unit_code"] = unit_code
+        if floor_name:
+            query += " AND FloorName = @floor_name"
+            params["floor_name"] = floor_name
+        if line_name:
+            query += " AND LineName = @line_name"
+            params["line_name"] = line_name
+        if part_name:
+            query += " AND PartName = @part_name"
+            params["part_name"] = part_name
+        query += " ORDER BY LineName, StyleNo, EmpName"
+
+        with rtms_engine.engine.connect() as conn:
+            df = pd.read_sql(text(query), conn, params=params)
+        return {"status": "success", "data": df.to_dict(orient="records")}
+    except Exception as e:
+        logger.error(f"Failed to fetch flagged: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Health check
 @app.get("/health")
@@ -1966,19 +2037,22 @@ Acts like ChatGPT (smooth typing animation in frontend).
 #             "records_used": len(df),
 #             "enhancement_level": "fallback_mode"
 #         }
-@router.post("/test_whatsapp_alerts")
-async def test_whatsapp_alerts(test_mode: bool = True):
+@router.post("/api/rtms/test_whatsapp_alerts")
+async def test_whatsapp_alerts():
     """
-    Test endpoint to send sample WhatsApp alerts.
-    test_mode=True → sends only to DEFAULT_TEST_NUMBERS (mock or Twilio sandbox)
+    Test endpoint:
+    - Runs full WhatsApp send cycle in normal mode
+    - Saves PDF, CSV, .txt mocks, .json mocks for every supervisor
+    - Returns JSON summary
     """
     try:
-        results = await whatsapp_service.generate_and_send_reports(test_mode=test_mode)
-        return {"status": "success", "results": results}
+        result = await whatsapp_service.generate_and_send_reports(
+            test_mode=False,
+            save_artifacts=True   # ✅ Explicitly save artifacts for test API
+        )
+        return {"status": "ok", "result": result}
     except Exception as e:
-        logger.error(f"test_whatsapp_alerts failed: {e}", exc_info=True)
-        return {"status": "error", "reason": str(e)}
-
+        return {"status": "error", "message": str(e)}
 
 from ollama_client import ollama_client  # AI service
 logger = logging.getLogger("ai_api")
