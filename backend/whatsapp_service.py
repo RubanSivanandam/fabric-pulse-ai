@@ -384,16 +384,19 @@ class ProductionReadyWhatsAppService:
                     )
                     results.append({"to": phone, "result": res})
             else:
-                for idx, r in enumerate(part_rows):
-                    to = r.phone_number
-                    if not to:
-                        continue
+                # ✅ Restrict automatic scheduler to only the first supervisor list (for testing)
+                allowed_numbers = ["+919943625493", "+918939990949"]
+
+                if part_rows:
+                    r = part_rows[0]  # send only first supervisor row data
                     msg = self._format_supervisor_message(r, session_code)
-                    res = await self.send_whatsapp_report(
-                        to, msg, pdf_path=str(pdf_path) if pdf_path else None,
-                        csv_path=csv_path, row=r, save_artifacts=save_artifacts
-                    )
-                    results.append({"to": to, "result": res})
+                    for to in allowed_numbers:
+                        res = await self.send_whatsapp_report(
+                            to, msg, pdf_path=str(pdf_path) if pdf_path else None,
+                            csv_path=csv_path, row=r, save_artifacts=save_artifacts
+                        )
+                        results.append({"to": to, "result": res})
+
                     if first_msg is None:
                         first_msg, first_row = msg, r
 
@@ -477,22 +480,28 @@ class ProductionReadyWhatsAppService:
     def start_hourly_scheduler(self):
         def job():
             try:
-                self.execute_stored_proc()
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                logger.info(f"[Scheduler] Triggered WhatsApp cycle at {now}")
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(
+                    self.generate_and_send_reports(test_mode=False, save_artifacts=False)
+                )
+                loop.close()
             except Exception as e:
-                logger.error(f"Scheduler job failed: {e}")
+                logger.error(f"Scheduler job failed: {e}", exc_info=True)
 
-         # ⏰ run every hour
-            schedule.every().hour.at(":00").do(job)
+    # ⏱️ Every 5 minutes
+            schedule.every(5).minutes.do(job)
 
-        def run_schedule():
-            logger.info("✅ Hourly scheduler started (SP only).")
-            while True:
-                schedule.run_pending()
-                time.sleep(1)
+    def run_schedule():
+        logger.info("✅ WhatsApp scheduler started (every 5 minutes)")
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
 
-        t = threading.Thread(target=run_schedule, daemon=True)
-        t.start()
-
+    t = threading.Thread(target=run_schedule, daemon=True)
+    t.start()
 
 # Export instance
 whatsapp_service = ProductionReadyWhatsAppService()
