@@ -6,7 +6,7 @@ import time
 import schedule
 import threading
 import os
-from datetime import datetime
+from datetime import datetime, date
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,7 +36,7 @@ if not logger.handlers:
     ch.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(ch)
 
-DEFAULT_TEST_NUMBERS = ["+919943625493", "+918939990949"]
+DEFAULT_TEST_NUMBERS = ["+919943625493", "+918939990949", "+919894070745"]
 TEMPLATE_SID = "HX059c8f6500786c9f43eda250ef7178e1"  # Twilio template SID
 
 
@@ -67,7 +67,7 @@ def _make_db2_engine_from_env() -> Optional[any]:
         eng = create_engine("mssql+pyodbc:///?odbc_connect=" + quote_plus(conn_str), pool_pre_ping=True)
         return eng
     except Exception as e:
-        logger.error(f"Failed creating DB2 engine: {e}")
+        logger.error(f"❌ Failed creating DB2 engine: {e}")
         return None
 
 
@@ -85,33 +85,35 @@ class ProductionReadyWhatsAppService:
         try:
             if Client and hasattr(self.config, "twilio") and self.config.twilio.is_configured():
                 self.twilio_client = Client(self.config.twilio.account_sid, self.config.twilio.auth_token)
-                logger.info("Twilio client initialized")
+                logger.info("✅ Twilio client initialized")
             else:
-                logger.info("Twilio not configured or client not available - using mock send")
+                logger.info("⚠️ Twilio not configured or client not available - using mock send")
         except Exception as e:
-            logger.warning(f"Failed to init Twilio client: {e}")
+            logger.warning(f"⚠️ Failed to init Twilio client: {e}")
             self.twilio_client = None
 
         self.db2_engine = _make_db2_engine_from_env()
 
     # ----------------------------------------------------------------------
-    # Execute stored procedure (DB1)
+    # Stored Procedure (DB1)
     # ----------------------------------------------------------------------
     def execute_stored_proc(self):
         """Run sync stored procedure before querying DB1"""
         try:
             from fabric_pulse_ai_main import rtms_engine
             if not rtms_engine or not rtms_engine.engine:
-                logger.error("DB1 engine not available for stored procedure.")
+                logger.error("❌ DB1 engine not available for stored procedure.")
                 return
 
-            query = "EXEC dbo.usp_Sync_RTMS_SessionWiseProduction @TranDate = CAST(GETDATE() AS DATE)"
+            query = text("EXEC dbo.usp_Sync_RTMS_SessionWiseProduction @TranDate = :tran_date")
+            today = date.today()
+
             with rtms_engine.engine.begin() as conn:
-                conn.execute(text(query))
+                conn.execute(query, {"tran_date": today})
 
             logger.info("✅ Stored procedure executed successfully on DB1.")
         except Exception as e:
-            logger.error(f"execute_stored_proc failed: {e}", exc_info=True)
+            logger.error(f"❌ execute_stored_proc failed: {e}", exc_info=True)
 
     # ----------------------------------------------------------------------
     # Inline Query (DB1)
@@ -120,11 +122,8 @@ class ProductionReadyWhatsAppService:
         try:
             from fabric_pulse_ai_main import rtms_engine
             if not rtms_engine or not rtms_engine.engine:
-                logger.error("DB1 engine not available for production query")
+                logger.error("❌ DB1 engine not available for production query")
                 return []
-
-            # 🔹 Run stored procedure first
-            self.execute_stored_proc()
 
             sql = """
             ;WITH OperationDetails AS (
@@ -259,9 +258,10 @@ class ProductionReadyWhatsAppService:
                         achv_percent=float(r["AchvPercent"] or 0.0),
                     )
                 )
+            logger.info(f"📊 _query_part_efficiencies fetched {len(rows)} rows")
             return rows
         except Exception as e:
-            logger.error(f"_query_part_efficiencies failed: {e}", exc_info=True)
+            logger.error(f"❌ _query_part_efficiencies failed: {e}", exc_info=True)
             return []
 
     # ----------------------------------------------------------------------
@@ -269,7 +269,7 @@ class ProductionReadyWhatsAppService:
     # ----------------------------------------------------------------------
     def _db2_query(self, sql: str) -> pd.DataFrame:
         if self.db2_engine is None:
-            raise RuntimeError("DB2 engine not configured.")
+            raise RuntimeError("❌ DB2 engine not configured.")
         with self.db2_engine.connect() as conn:
             return pd.read_sql(text(sql), conn)
 
@@ -284,10 +284,13 @@ class ProductionReadyWhatsAppService:
             """
             df = self._db2_query(q)
             if df.empty:
+                logger.info("ℹ️ No session code found")
                 return None
-            return str(df.iloc[0]["SessionCode"])
+            code = str(df.iloc[0]["SessionCode"])
+            logger.info(f"ℹ️ Retrieved session_code={code}")
+            return code
         except Exception as e:
-            logger.error(f"get_session_code failed: {e}", exc_info=True)
+            logger.error(f"❌ get_session_code failed: {e}", exc_info=True)
             return None
 
     # ----------------------------------------------------------------------
@@ -317,27 +320,15 @@ class ProductionReadyWhatsAppService:
         save_artifacts: bool = False
     ) -> Dict[str, Any]:
         try:
+            logger.info(f"📨 Preparing WhatsApp to {phone_number}")
             if not phone_number.startswith("+"):
                 phone_number = f"+91{phone_number}"
-
-            mock_txt_file = self.mock_dir / f"mock_message_{phone_number.replace('+','')}_{int(time.time())}.txt"
-            with open(mock_txt_file, "w", encoding="utf-8") as f:
-                f.write(f"To: {phone_number}\n\n{message}")
-
-            if save_artifacts:
-                payload = {
-                    "to": phone_number,
-                    "body": message,
-                    "sent_at": datetime.now().isoformat()
-                }
-                mock_json_file = self.mock_dir / f"mock_{phone_number.replace('+','')}_{int(time.time())}.json"
-                with open(mock_json_file, "w", encoding="utf-8") as f:
-                    json.dump(payload, f, indent=2, ensure_ascii=False)
 
             if self.temporarily_disabled or self.twilio_client is None or not (
                 hasattr(self.config, "twilio") and self.config.twilio.is_configured()
             ):
-                return {"status": "mocked", "file": str(mock_txt_file)}
+                logger.warning(f"⚠️ WhatsApp send mocked for {phone_number}")
+                return {"status": "mocked", "to": phone_number, "body": message}
 
             if row is None:
                 raise ValueError("row must be provided when sending template message")
@@ -346,7 +337,7 @@ class ProductionReadyWhatsAppService:
             to_addr = f"whatsapp:{phone_number}"
             from_addr = from_whatsapp if str(from_whatsapp).startswith("whatsapp:") else f"whatsapp:{from_whatsapp}"
 
-            # ✅ FIX: flat JSON (no "variables" wrapper)
+            logger.info(f"➡️ Sending WhatsApp to {phone_number} via Twilio...")
             msg = self.twilio_client.messages.create(
                 from_=from_addr,
                 to=to_addr,
@@ -363,61 +354,66 @@ class ProductionReadyWhatsAppService:
                     "9": session_code or ""
                 })
             )
-
-            return {"status": "sent", "sid": getattr(msg, 'sid', None), "mock_file": str(mock_txt_file)}
-
+            logger.info(f"✅ WhatsApp sent to {phone_number}, SID={getattr(msg,'sid',None)}")
+            return {"status": "sent", "sid": getattr(msg, 'sid', None)}
         except Exception as e:
-            logger.error(f"send_whatsapp_report failed: {e}", exc_info=True)
+            logger.error(f"❌ send_whatsapp_report failed: {e}", exc_info=True)
             return {"status": "error", "reason": str(e)}
 
     # ----------------------------------------------------------------------
     # Scheduler
     # ----------------------------------------------------------------------
     def start_scheduler(self):
-        """Start background scheduler to send WhatsApp every 5 minutes"""
+        """Start background scheduler to send WhatsApp every hour"""
 
         def job():
             try:
                 now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                logger.info(f"[Scheduler] Triggered WhatsApp cycle at {now}")
+                logger.info(f"[Scheduler] 🚀 Triggered WhatsApp cycle at {now}")
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 loop.run_until_complete(self.run_report_cycle())
                 loop.close()
+                logger.info("[Scheduler] ✅ WhatsApp cycle completed")
             except Exception as e:
-                logger.error(f"Scheduler job failed: {e}", exc_info=True)
+                logger.error(f"❌ Scheduler job failed: {e}", exc_info=True)
 
-        schedule.every(5).minutes.do(job)
+        schedule.every().hour.do(job)
+        # every 1 minute
+        # schedule.every(1).minutes.do(job)
 
         def run_schedule():
-            logger.info("✅ WhatsApp scheduler started (every 5 minutes)")
+            logger.info("✅ WhatsApp scheduler started (every hour)")
             while True:
                 schedule.run_pending()
                 time.sleep(1)
 
         threading.Thread(target=run_schedule, daemon=True).start()
 
-        async def run_report_cycle(self):
-            try:
-                rows = await self._query_part_efficiencies()
-                session_code = self.get_session_code()
+    # ----------------------------------------------------------------------
+    # Run Report Cycle
+    # ----------------------------------------------------------------------
+    async def run_report_cycle(self):
+        logger.info("🚀 run_report_cycle started")
+        self.execute_stored_proc()
+        rows = await self._query_part_efficiencies()
+        logger.info(f"📊 Processing {len(rows)} rows")
+        session_code = self.get_session_code()
 
-                # Always send to supervisors + these test numbers
-                extra_test_numbers = ["+919943625493", "+918939990949", "+919894070745"]
+        for r in rows:
+            msg = self._format_supervisor_message(r, session_code)
+            logger.info(f"📝 Prepared message for Supervisor={r.supervisor_name}, Phone={r.phone_number}")
 
-                for r in rows:
-                    msg = self._format_supervisor_message(r, session_code)
+            if r.phone_number:
+                logger.info(f"📤 Sending to supervisor {r.phone_number}")
+                await self.send_whatsapp_report(r.phone_number, msg, row=r, session_code=session_code)
 
-                    # 1️⃣ Send to supervisor’s actual number (if exists)
-                    if r.phone_number:
-                        await self.send_whatsapp_report(r.phone_number, msg, row=r, session_code=session_code)
+            for test_num in self.test_numbers:
+                logger.info(f"📤 Sending duplicate to test number {test_num}")
+                await self.send_whatsapp_report(test_num, msg, row=r, session_code=session_code)
 
-                    # 2️⃣ Also send to test numbers
-                    for test_num in extra_test_numbers:
-                        await self.send_whatsapp_report(test_num, msg, row=r, session_code=session_code)
+        logger.info("🏁 run_report_cycle completed")
 
-            except Exception as e:
-                logger.error(f"run_report_cycle failed: {e}", exc_info=True)
 
 # Export singleton
 whatsapp_service = ProductionReadyWhatsAppService()
