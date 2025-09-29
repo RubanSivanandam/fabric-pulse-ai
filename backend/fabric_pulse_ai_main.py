@@ -1304,81 +1304,308 @@ async def analyze_production_data(
         logger.error(f"Failed to analyze production data: {e}")
         raise HTTPException(status_code=500, detail="Failed to analyze production data")
 
-@app.get("/api/rtms/efficiency")
-async def get_operator_efficiencies(
-    unit_code: Optional[str] = Query(None),
-    floor_name: Optional[str] = Query(None),
-    line_name: Optional[str] = Query(None),
-    operation: Optional[str] = Query(None),
-    part_name: Optional[str] = Query(None),
-    limit: int = Query(1000, ge=1, le=5000)
+@router.get("/api/rtms/efficiency")
+async def get_efficiency_summary(
+    unit_code: str = Query(..., description="Unit code"),
+    floor_name: str = Query(..., description="Floor name"),
+    line_name: str = Query(..., description="Line name"),
+    part_name: str = Query(..., description="Part name"),
 ):
-    """Get operator efficiency analysis with AI insights"""
+    """
+    Cards data + underperformers (NoOfOperators) using CTE.
+    Date is FIXED to 2025-09-29 (for testing).
+    """
     try:
-        # Fetch production data
-        data = await rtms_engine.fetch_production_data(
-            unit_code=unit_code,
-            floor_name=floor_name,
-            line_name=line_name,
-            operation=operation,
-            part_name=part_name,
-            limit=limit
+        if not rtms_engine or not rtms_engine.engine:
+            raise HTTPException(status_code=500, detail="DB engine not available")
+
+        # Use a fixed date instead of GETDATE()
+        fixed_date = "2025-09-29"
+
+        cte_sql = text(f"""
+        ;WITH OperationDetails AS (
+            SELECT 
+                A.ReptType, 
+                A.UnitCode,
+                A.TranDate,
+                A.LineName,
+                B.SupervisorName,
+                B.SupervisorCode,
+                B.PhoneNumber,
+                A.PartName,
+                A.PartSeq,
+                SUM(A.PRODNPCS) AS ProdPcs,
+                COUNT(*) AS NoofOprs
+            FROM RTMS_SessionWiseProduction A
+            JOIN RTMS_SupervisorsDetl B
+                ON A.LineName = B.LineName
+               AND A.PartName = B.PartName
+            WHERE 
+                A.UnitCode = :unit_code
+                AND A.FloorName = :floor_name
+                AND A.LineName = :line_name
+                AND A.PartName = :part_name
+                AND CAST(A.TranDate AS DATE) = '{fixed_date}'
+                AND A.ReptType = 'RTM$'
+                AND A.ISFinPart = 'Y'
+            GROUP BY 
+                A.ReptType,
+                A.UnitCode,
+                A.TranDate,
+                A.LineName,
+                B.SupervisorName,
+                B.SupervisorCode,
+                B.PhoneNumber,
+                A.PartName,
+                A.PartSeq
+        ),
+        OperationSummary AS (
+            SELECT 
+                ReptType,
+                TranDate,
+                LineName,
+                PartSeq,
+                PartName,
+                Operation,
+                SUM(ProdnPcs) AS OperProd,
+                COUNT(DISTINCT EmpCode) AS NoofOperators,
+                ISFinPart
+            FROM dbo.RTMS_SessionWiseProduction 
+            WHERE CAST(TranDate AS DATE) = '{fixed_date}'
+              AND ReptType = 'RTM$'
+              AND UnitCode = :unit_code
+              AND FloorName = :floor_name
+              AND LineName = :line_name
+              AND PartName = :part_name
+            GROUP BY ReptType, TranDate, LineName, PartSeq, PartName, Operation, ISFinPart
+        ),
+        MaxProdPerPart AS (
+            SELECT 
+                ReptType,
+                TranDate,
+                LineName,
+                PartSeq,
+                PartName,
+                ISFinPart,
+                MAX(OperProd) AS MaxProd
+            FROM OperationSummary
+            GROUP BY ReptType, TranDate, LineName, PartSeq, PartName, ISFinPart
+        ),
+        LowPerformers AS (
+            SELECT 
+                a.ReptType,
+                a.TranDate,
+                a.LineName,
+                a.PartSeq,
+                a.PartName,
+                a.Operation,
+                a.OperProd,
+                b.MaxProd,
+                a.NoofOperators,
+                ROUND(b.MaxProd * 0.85, 0) AS TargetPcs,
+                ROUND((a.OperProd * 100.0) / b.MaxProd, 2) AS AchvPercent,
+                a.ISFinPart
+            FROM OperationSummary a
+            JOIN MaxProdPerPart b
+                ON a.ReptType = b.ReptType
+               AND a.TranDate = b.TranDate
+               AND a.LineName = b.LineName
+               AND a.PartSeq = b.PartSeq
+               AND a.PartName = b.PartName
+            WHERE a.OperProd < b.MaxProd * 0.85
+              AND a.ISFinPart = 'Y'
+        ),
+        SummaryTable AS (
+            SELECT 
+                ReptType,
+                TranDate,
+                LineName,
+                PartSeq,
+                PartName,
+                MAX(TargetPcs) AS TargetPcs,
+                MAX(AchvPercent) AS AchvPercent
+            FROM LowPerformers
+            GROUP BY ReptType, TranDate, LineName, PartSeq, PartName
         )
-        
-        # Process analysis
-        analysis = rtms_engine.process_efficiency_analysis(data)
-        
-        return {
-            "status": "success",
-            "data": analysis,
-            "filters_applied": {
+        SELECT 
+            OD.ReptType, OD.UnitCode, OD.TranDate, OD.LineName,
+            OD.SupervisorName, OD.SupervisorCode, OD.PhoneNumber,
+            OD.PartName, OD.PartSeq, OD.ProdPcs, OD.NoofOprs,
+            ST.TargetPcs, ST.AchvPercent
+        FROM OperationDetails OD
+        JOIN SummaryTable ST
+            ON OD.TranDate = ST.TranDate
+           AND OD.LineName = ST.LineName
+           AND OD.PartName = ST.PartName
+           AND OD.ReptType = ST.ReptType
+        ORDER BY OD.LineName, OD.PartSeq;
+        """)
+
+        detail_sql = text(f"""
+        SELECT 
+            A.EmpCode, A.EmpName, A.LineName, A.PartName,
+            A.NewOperSeq AS Operation, 
+            A.ProdnPcs AS Production,
+            A.Eff100   AS Target,
+            CASE WHEN A.Eff100 > 0 THEN (A.ProdnPcs * 100.0) / A.Eff100 ELSE 0 END AS Efficiency,
+            B.SupervisorName, B.SupervisorCode, B.PhoneNumber
+        FROM RTMS_SessionWiseProduction A
+        JOIN RTMS_SupervisorsDetl B
+          ON A.LineName = B.LineName AND A.PartName = B.PartName
+        WHERE A.ReptType = 'RTM$'
+          AND CAST(A.TranDate AS DATE) = '{fixed_date}'
+          AND A.UnitCode = :unit_code
+          AND A.FloorName = :floor_name
+          AND A.LineName = :line_name
+          AND A.PartName = :part_name
+          AND A.ISFinPart = 'Y'
+        """)
+
+        with rtms_engine.engine.connect() as conn:
+            df_cte = pd.read_sql(cte_sql, conn, params={
                 "unit_code": unit_code,
                 "floor_name": floor_name,
                 "line_name": line_name,
-                "operation": operation
-            }
-        }
-    except Exception as e:
-        logger.error(f"Failed to get operator efficiencies: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get operator efficiencies")
-@router.get("/api/rtms/flagged")
-async def get_flagged_employees(
-    unit_code: Optional[str] = Query(None),
-    floor_name: Optional[str] = Query(None),
-    line_name: Optional[str] = Query(None),
-    part_name: Optional[str] = Query(None)
-):
-    try:
-        query = """
-            SELECT EmpName, EmpCode, UnitCode, FloorName, LineName, StyleNo,
-                   PartName, Operation, NewOperSeq, ProdnPcs, Eff100, EffPer, IsRedFlag
-            FROM [ITR_PRO_IND].[dbo].[RTMS_SessionWiseProduction]
-            WHERE CAST(TranDate AS DATE) = CAST(GETDATE() AS DATE)
-              AND IsRedFlag = 1
-              AND EmpName IS NOT NULL
-              AND LineName IS NOT NULL
-        """
-        params = {}
-        if unit_code:
-            query += " AND UnitCode = @unit_code"
-            params["unit_code"] = unit_code
-        if floor_name:
-            query += " AND FloorName = @floor_name"
-            params["floor_name"] = floor_name
-        if line_name:
-            query += " AND LineName = @line_name"
-            params["line_name"] = line_name
-        if part_name:
-            query += " AND PartName = @part_name"
-            params["part_name"] = part_name
-        query += " ORDER BY LineName, StyleNo, EmpName"
+                "part_name": part_name
+            })
+            df_emp = pd.read_sql(detail_sql, conn, params={
+                "unit_code": unit_code,
+                "floor_name": floor_name,
+                "line_name": line_name,
+                "part_name": part_name
+            })
 
-        with rtms_engine.engine.connect() as conn:
-            df = pd.read_sql(text(query), conn, params=params)
-        return {"status": "success", "data": df.to_dict(orient="records")}
+        total_production = int(df_cte["ProdPcs"].sum()) if not df_cte.empty else 0
+        total_target = int(df_cte["TargetPcs"].sum()) if not df_cte.empty else 0
+        efficiency = float((total_production / total_target) * 100.0) if total_target > 0 else 0.0
+        underperformers_count = int(df_cte["NoofOprs"].sum()) if not df_cte.empty else 0
+
+        underperformers = []
+        if not df_emp.empty:
+            df_u = df_emp[df_emp["Efficiency"] < 85.0]
+            for _, r in df_u.iterrows():
+                underperformers.append({
+                    "emp_code": str(r.EmpCode),
+                    "emp_name": str(r.EmpName),
+                    "line_name": str(r.LineName),
+                    "part_name": str(r.PartName),
+                    "operation": str(r.Operation) if pd.notna(r.Operation) else None,
+                    "production": int(r.Production) if pd.notna(r.Production) else 0,
+                    "target": int(r.Target) if pd.notna(r.Target) else 0,
+                    "efficiency": float(r.Efficiency) if pd.notna(r.Efficiency) else 0.0,
+                    "supervisor_name": str(r.SupervisorName) if pd.notna(r.SupervisorName) else None,
+                    "supervisor_code": str(r.SupervisorCode) if pd.notna(r.SupervisorCode) else None,
+                    "phone_number": str(r.PhoneNumber) if pd.notna(r.PhoneNumber) else None,
+                })
+
+        return {"success": True, "data": {
+            "total_production": total_production,
+            "total_target": total_target,
+            "efficiency": round(efficiency, 2),
+            "underperformers_count": underperformers_count,
+            "underperformers": underperformers
+        }}
     except Exception as e:
-        logger.error(f"Failed to fetch flagged: {e}")
+        logger.error(f"efficiency endpoint failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/api/rtms/flagged")
+async def get_flagged(
+    unit_code: str = Query(...),
+    floor_name: str = Query(...),
+    line_name: str = Query(...),
+    part_name: str = Query(...)
+):
+    """
+    Return part-wise flagged employees (IsRedFlag = 1) with supervisor join.
+    Always uses today's date automatically.
+    """
+    if not rtms_engine or not rtms_engine.engine:
+        raise HTTPException(status_code=500, detail="DB engine not available")
+
+    # ✅ Always use today's date
+    fixed_date = date.today().strftime("%Y-%m-%d")
+
+    sql = text("""
+        SELECT 
+            A.PartName,
+            A.EmpCode,
+            A.EmpName,
+            A.LineName,
+            A.ProdnPcs AS Production,
+            A.Eff100 AS Target,
+            A.EffPer AS Efficiency,
+            A.NewOperSeq,
+            A.Operation,
+            A.IsRedFlag,
+            B.SupervisorName,
+            B.SupervisorCode,
+            B.PhoneNumber
+        FROM RTMS_SessionWiseProduction A
+        LEFT JOIN RTMS_SupervisorsDetl B
+          ON A.LineName = B.LineName AND A.PartName = B.PartName
+        WHERE CAST(A.TranDate AS DATE) = :fixed_date
+          AND A.ReptType IN ('RTM$', 'RTMS', 'RTM5')
+          AND A.UnitCode = :unit_code
+          AND A.FloorName = :floor_name
+          AND A.LineName = :line_name
+          AND A.PartName = :part_name
+          AND A.IsRedFlag = 1
+    """)
+
+    with rtms_engine.engine.connect() as conn:
+        df = pd.read_sql(sql, conn, params={
+            "fixed_date": fixed_date,
+            "unit_code": unit_code,
+            "floor_name": floor_name,
+            "line_name": line_name,
+            "part_name": part_name
+        })
+
+    if df.empty:
+        return {"success": True, "data": {"parts": []}}
+
+    parts_out = []
+    grp = df.groupby("PartName")
+    for pname, g in grp:
+        employees = []
+        for _, r in g.iterrows():
+            production = int(r.Production) if pd.notna(r.Production) else 0
+            target = int(r.Target) if pd.notna(r.Target) else 0
+
+            efficiency = None
+            if pd.notna(r.Efficiency):
+                try:
+                    efficiency = float(r.Efficiency)
+                except Exception:
+                    efficiency = None
+            if efficiency is None and target > 0:
+                efficiency = round((production / target) * 100.0, 2)
+
+            employees.append({
+                "emp_code": str(r.EmpCode) if pd.notna(r.EmpCode) else None,
+                "emp_name": str(r.EmpName) if pd.notna(r.EmpName) else None,
+                "unit_code": str(r.UnitCode) if pd.notna(r.UnitCode)else None,
+                "floor_name": str(r.FloorName) if pd.notna(r.FloorName) else None,
+                "line_name": str(r.LineName) if pd.notna(r.LineName) else None,
+                "is_red_flag": int(r.IsRedFlag) if pd.notna(r.IsRedFlag) else 0,
+                "production": production,
+                "target": target,
+                "efficiency": float(efficiency) if efficiency is not None else None,
+                "new_oper_seq": str(r.NewOperSeq) if pd.notna(r.NewOperSeq) else None,
+                "operation": str(r.NewOperSeq) if pd.notna(r.NewOperSeq) else None,
+                "supervisor_name": str(r.SupervisorName) if pd.notna(r.SupervisorName) else None,
+                "supervisor_code": str(r.SupervisorCode) if pd.notna(r.SupervisorCode) else None,
+                "phone_number": str(r.PhoneNumber) if pd.notna(r.PhoneNumber) else None,
+            })
+        parts_out.append({
+            "part_name": str(pname),
+            "employee_count": len(employees),
+            "employees": employees,
+        })
+
+    return {"success": True, "data": {"parts": parts_out}}
+
 
 # Health check
 @app.get("/health")

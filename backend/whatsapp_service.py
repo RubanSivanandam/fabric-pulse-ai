@@ -36,7 +36,7 @@ if not logger.handlers:
     ch.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(ch)
 
-DEFAULT_TEST_NUMBERS = ["+919943625493", "+918939990949", "+919894070745"]
+DEFAULT_TEST_NUMBERS = TEST_NUMBERS=["+919943625493", "+918939990949", "+919894070745","+919965113056","+919840723523","+917338899408"]
 TEMPLATE_SID = "HX059c8f6500786c9f43eda250ef7178e1"  # Twilio template SID
 
 
