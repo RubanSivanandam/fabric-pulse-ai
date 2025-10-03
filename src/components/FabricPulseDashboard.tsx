@@ -278,77 +278,72 @@ export default function FabricPulseDashboard() {
   const [alerts, setAlerts] = useState<any[]>([]);
 
   // Normalizer: flatten flagged response into consistent employee objects
-  // Normalizer: flatten flagged response into consistent employee objects
-  const normalizeFlaggedEmployees = (
-    payload: FlaggedResponse
-  ): FlaggedEmployeeRaw[] => {
-    if (!payload) return [];
+ const normalizeFlaggedEmployees = (payload: FlaggedResponse): FlaggedEmployeeRaw[] => {
+  if (!payload) return [];
+  const seenEmpCodes = new Set<string>();
+  const result: FlaggedEmployeeRaw[] = [];
 
-    const fallbackUnit = unit || undefined;
-    const fallbackFloor = floor || undefined;
-    const fallbackLine = line || undefined;
-    const fallbackPart = part || undefined;
+  const fallbackUnit = unit || undefined;
+  const fallbackFloor = floor || undefined;
+  const fallbackLine = line || undefined;
+  const fallbackPart = part || undefined;
 
-    // grouped shape
-    if (
-      (payload as any).data?.parts &&
-      Array.isArray((payload as any).data.parts)
-    ) {
-      const parts: FlaggedPartGroup[] = (payload as any).data.parts;
-      return parts.flatMap((pg) =>
-        (pg.employees || []).map((e) => ({
-          // keep original fields, then normalise / fallback
-          emp_code: e.emp_code ?? e.EmpCode ?? e.Emp_Code ?? e.EmpID,
+  if ((payload as any).data?.parts && Array.isArray((payload as any).data.parts)) {
+    const parts: FlaggedPartGroup[] = (payload as any).data.parts;
+    parts.forEach((pg) => {
+      (pg.employees || []).forEach((e) => {
+        const empCode = e.emp_code ?? e.EmpCode ?? e.Emp_Code ?? e.EmpID;
+        if (!empCode || seenEmpCodes.has(empCode)) return;
+        seenEmpCodes.add(empCode);
+        result.push({
+          emp_code: empCode,
           emp_name: e.emp_name ?? e.EmpName ?? e.Emp_Name,
-          // prefer employee-level value, else use part-level value, else fallback from filter
-          unit_code:
-            e.unit_code ?? e.UnitCode ?? e.Unit ?? fallbackUnit ?? undefined,
-          floor_name:
-            e.floor_name ?? e.FloorName ?? e.Floor ?? fallbackFloor ?? undefined,
-          line_name:
-            e.line_name ?? e.LineName ?? e.Line ?? fallbackLine ?? undefined,
+          unit_code: e.unit_code ?? e.UnitCode ?? e.Unit ?? fallbackUnit ?? undefined,
+          floor_name: e.floor_name ?? e.FloorName ?? e.Floor ?? fallbackFloor ?? undefined,
+          line_name: e.line_name ?? e.LineName ?? e.Line ?? fallbackLine ?? undefined,
           part_name: pg.part_name ?? e.part_name ?? e.PartName ?? fallbackPart,
-          new_oper_seq:
-            e.new_oper_seq ?? e.NewOperSeq ?? e.NewOperSeq?.toString() ?? e.operation,
+          new_oper_seq: e.new_oper_seq ?? e.NewOperSeq ?? e.NewOperSeq?.toString() ?? e.operation,
           operation: e.operation ?? e.Operation,
-          production:
-            e.production ??
-            e.ProdnPcs ??
-            (typeof e.ProdnPcs === "object" ? Number(e.ProdnPcs?.value ?? 0) : Number(e.ProdnPcs ?? 0)) ??
-            0,
+          production: e.production ?? e.ProdnPcs ?? Number(e.ProdnPcs ?? 0) ?? 0,
           target: e.target ?? e.Eff100 ?? Number(e.Eff100 ?? 0) ?? 0,
           efficiency: e.efficiency ?? e.EffPer ?? Number(e.EffPer ?? 0) ?? 0,
           phone_number: e.phone_number ?? e.PhoneNumber ?? null,
           is_red_flag: e.IsRedFlag ?? e.is_red_flag ?? 0,
           supervisor_name: e.supervisor_name ?? e.SupervisorName ?? null,
           supervisor_code: e.supervisor_code ?? e.SupervisorCode ?? null,
-          // keep raw for debugging if needed
           __raw: e,
-        }))
-      );
-    }
-
-    // legacy flat rows
+        });
+      });
+    });
+  } else {
     const rows: RawFlaggedRow[] = (payload as any).data ?? [];
-    return rows.map((r) => ({
-      emp_code: r.EmpCode ?? r.emp_code ?? r.Emp_Code ?? r.EmpID,
-      emp_name: r.EmpName ?? r.emp_name ?? r.Emp_Name,
-      unit_code: r.UnitCode ?? r.unit_code ?? fallbackUnit,
-      floor_name: r.FloorName ?? r.floor_name ?? fallbackFloor,
-      line_name: r.LineName ?? r.line_name ?? fallbackLine,
-      part_name: r.PartName ?? r.part_name ?? fallbackPart,
-      new_oper_seq: r.NewOperSeq ?? r.new_oper_seq,
-      operation: r.Operation ?? r.operation,
-      production: r.ProdnPcs ?? r.production ?? Number(r.ProdnPcs ?? 0),
-      target: r.Eff100 ?? r.target ?? Number(r.Eff100 ?? 0),
-      efficiency: r.EffPer ?? r.efficiency ?? Number(r.EffPer ?? 0),
-      phone_number: r.phone_number ?? r.PhoneNumber ?? null,
-      is_red_flag: r.IsRedFlag ?? r.is_red_flag ?? 0,
-      supervisor_name: r.supervisor_name ?? r.SupervisorName,
-      supervisor_code: r.supervisor_code ?? r.SupervisorCode,
-      __raw: r,
-    }));
-  };
+    rows.forEach((r) => {
+      const empCode = r.EmpCode ?? r.emp_code ?? r.Emp_Code ?? r.EmpID;
+      if (!empCode || seenEmpCodes.has(empCode)) return;
+      seenEmpCodes.add(empCode);
+      result.push({
+        emp_code: empCode,
+        emp_name: r.EmpName ?? r.emp_name ?? r.Emp_Name,
+        unit_code: r.UnitCode ?? r.unit_code ?? fallbackUnit,
+        floor_name: r.FloorName ?? r.floor_name ?? fallbackFloor,
+        line_name: r.LineName ?? r.line_name ?? fallbackLine,
+        part_name: r.PartName ?? r.part_name ?? fallbackPart,
+        new_oper_seq: r.NewOperSeq ?? r.new_oper_seq,
+        operation: r.Operation ?? r.operation,
+        production: r.ProdnPcs ?? r.production ?? Number(r.ProdnPcs ?? 0),
+        target: r.Eff100 ?? r.target ?? Number(r.Eff100 ?? 0),
+        efficiency: r.EffPer ?? r.efficiency ?? Number(r.EffPer ?? 0),
+        phone_number: r.phone_number ?? r.PhoneNumber ?? null,
+        is_red_flag: r.IsRedFlag ?? r.is_red_flag ?? 0,
+        supervisor_name: r.supervisor_name ?? r.SupervisorName,
+        supervisor_code: r.supervisor_code ?? r.SupervisorCode,
+        __raw: r,
+      });
+    });
+  }
+
+  return result;
+};
 
 
   // Create employee list from flaggedQ
