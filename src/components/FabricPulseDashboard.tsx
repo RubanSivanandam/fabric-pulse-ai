@@ -160,6 +160,24 @@ const fetchFlagged = (
     )}&part_name=${encodeURIComponent(part)}`
   );
 
+// Add next to other fetch helpers
+const fetchOperationWiseEmployees = (
+  unit: string,
+  floor: string,
+  line: string,
+  part: string
+) =>
+  fetch(
+    `${API_BASE}/api/rtms/operationWiseEmployees?unit_code=${encodeURIComponent(
+      unit
+    )}&floor_name=${encodeURIComponent(floor)}&line_name=${encodeURIComponent(
+      line
+    )}&part_name=${encodeURIComponent(part)}`
+  ).then(async (r) => {
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  });
+
 // ---------- Component ----------
 export default function FabricPulseDashboard() {
   // refs for GSAP
@@ -231,6 +249,15 @@ export default function FabricPulseDashboard() {
     refetchInterval: 5 * 60_000,
   });
 
+  // Add where other useQuery hooks are declared
+  const operationEmpQ = useQuery({
+    queryKey: ["operationEmp", unit, floor, line, part],
+    queryFn: () => fetchOperationWiseEmployees(unit, floor, line, part),
+    enabled: Boolean(unit && floor && line && part),
+    staleTime: 60_000,
+    refetchInterval: 5 * 60_000,
+  });
+
   // helper to set card refs for GSAP
   const setCardRef = (el: HTMLDivElement | null) => {
     if (!el) return;
@@ -278,73 +305,90 @@ export default function FabricPulseDashboard() {
   const [alerts, setAlerts] = useState<any[]>([]);
 
   // Normalizer: flatten flagged response into consistent employee objects
- const normalizeFlaggedEmployees = (payload: FlaggedResponse): FlaggedEmployeeRaw[] => {
-  if (!payload) return [];
-  const seenEmpCodes = new Set<string>();
-  const result: FlaggedEmployeeRaw[] = [];
+  const normalizeFlaggedEmployees = (
+    payload: FlaggedResponse
+  ): FlaggedEmployeeRaw[] => {
+    if (!payload) return [];
+    const seenEmpCodes = new Set<string>();
+    const result: FlaggedEmployeeRaw[] = [];
 
-  const fallbackUnit = unit || undefined;
-  const fallbackFloor = floor || undefined;
-  const fallbackLine = line || undefined;
-  const fallbackPart = part || undefined;
+    const fallbackUnit = unit || undefined;
+    const fallbackFloor = floor || undefined;
+    const fallbackLine = line || undefined;
+    const fallbackPart = part || undefined;
 
-  if ((payload as any).data?.parts && Array.isArray((payload as any).data.parts)) {
-    const parts: FlaggedPartGroup[] = (payload as any).data.parts;
-    parts.forEach((pg) => {
-      (pg.employees || []).forEach((e) => {
-        const empCode = e.emp_code ?? e.EmpCode ?? e.Emp_Code ?? e.EmpID;
+    if (
+      (payload as any).data?.parts &&
+      Array.isArray((payload as any).data.parts)
+    ) {
+      const parts: FlaggedPartGroup[] = (payload as any).data.parts;
+      parts.forEach((pg) => {
+        (pg.employees || []).forEach((e) => {
+          const empCode = e.emp_code ?? e.EmpCode ?? e.Emp_Code ?? e.EmpID;
+          if (!empCode || seenEmpCodes.has(empCode)) return;
+          seenEmpCodes.add(empCode);
+          result.push({
+            emp_code: empCode,
+            emp_name: e.emp_name ?? e.EmpName ?? e.Emp_Name,
+            unit_code:
+              e.unit_code ?? e.UnitCode ?? e.Unit ?? fallbackUnit ?? undefined,
+            floor_name:
+              e.floor_name ??
+              e.FloorName ??
+              e.Floor ??
+              fallbackFloor ??
+              undefined,
+            line_name:
+              e.line_name ?? e.LineName ?? e.Line ?? fallbackLine ?? undefined,
+            part_name:
+              pg.part_name ?? e.part_name ?? e.PartName ?? fallbackPart,
+            new_oper_seq:
+              e.new_oper_seq ??
+              e.NewOperSeq ??
+              e.NewOperSeq?.toString() ??
+              e.operation,
+            operation: e.operation ?? e.Operation,
+            production:
+              e.production ?? e.ProdnPcs ?? Number(e.ProdnPcs ?? 0) ?? 0,
+            target: e.target ?? e.Eff100 ?? Number(e.Eff100 ?? 0) ?? 0,
+            efficiency: e.efficiency ?? e.EffPer ?? Number(e.EffPer ?? 0) ?? 0,
+            phone_number: e.phone_number ?? e.PhoneNumber ?? null,
+            is_red_flag: e.IsRedFlag ?? e.is_red_flag ?? 0,
+            supervisor_name: e.supervisor_name ?? e.SupervisorName ?? null,
+            supervisor_code: e.supervisor_code ?? e.SupervisorCode ?? null,
+            __raw: e,
+          });
+        });
+      });
+    } else {
+      const rows: RawFlaggedRow[] = (payload as any).data ?? [];
+      rows.forEach((r) => {
+        const empCode = r.EmpCode ?? r.emp_code ?? r.Emp_Code ?? r.EmpID;
         if (!empCode || seenEmpCodes.has(empCode)) return;
         seenEmpCodes.add(empCode);
         result.push({
           emp_code: empCode,
-          emp_name: e.emp_name ?? e.EmpName ?? e.Emp_Name,
-          unit_code: e.unit_code ?? e.UnitCode ?? e.Unit ?? fallbackUnit ?? undefined,
-          floor_name: e.floor_name ?? e.FloorName ?? e.Floor ?? fallbackFloor ?? undefined,
-          line_name: e.line_name ?? e.LineName ?? e.Line ?? fallbackLine ?? undefined,
-          part_name: pg.part_name ?? e.part_name ?? e.PartName ?? fallbackPart,
-          new_oper_seq: e.new_oper_seq ?? e.NewOperSeq ?? e.NewOperSeq?.toString() ?? e.operation,
-          operation: e.operation ?? e.Operation,
-          production: e.production ?? e.ProdnPcs ?? Number(e.ProdnPcs ?? 0) ?? 0,
-          target: e.target ?? e.Eff100 ?? Number(e.Eff100 ?? 0) ?? 0,
-          efficiency: e.efficiency ?? e.EffPer ?? Number(e.EffPer ?? 0) ?? 0,
-          phone_number: e.phone_number ?? e.PhoneNumber ?? null,
-          is_red_flag: e.IsRedFlag ?? e.is_red_flag ?? 0,
-          supervisor_name: e.supervisor_name ?? e.SupervisorName ?? null,
-          supervisor_code: e.supervisor_code ?? e.SupervisorCode ?? null,
-          __raw: e,
+          emp_name: r.EmpName ?? r.emp_name ?? r.Emp_Name,
+          unit_code: r.UnitCode ?? r.unit_code ?? fallbackUnit,
+          floor_name: r.FloorName ?? r.floor_name ?? fallbackFloor,
+          line_name: r.LineName ?? r.line_name ?? fallbackLine,
+          part_name: r.PartName ?? r.part_name ?? fallbackPart,
+          new_oper_seq: r.NewOperSeq ?? r.new_oper_seq,
+          operation: r.Operation ?? r.operation,
+          production: r.ProdnPcs ?? r.production ?? Number(r.ProdnPcs ?? 0),
+          target: r.Eff100 ?? r.target ?? Number(r.Eff100 ?? 0),
+          efficiency: r.EffPer ?? r.efficiency ?? Number(r.EffPer ?? 0),
+          phone_number: r.phone_number ?? r.PhoneNumber ?? null,
+          is_red_flag: r.IsRedFlag ?? r.is_red_flag ?? 0,
+          supervisor_name: r.supervisor_name ?? r.SupervisorName,
+          supervisor_code: r.supervisor_code ?? r.SupervisorCode,
+          __raw: r,
         });
       });
-    });
-  } else {
-    const rows: RawFlaggedRow[] = (payload as any).data ?? [];
-    rows.forEach((r) => {
-      const empCode = r.EmpCode ?? r.emp_code ?? r.Emp_Code ?? r.EmpID;
-      if (!empCode || seenEmpCodes.has(empCode)) return;
-      seenEmpCodes.add(empCode);
-      result.push({
-        emp_code: empCode,
-        emp_name: r.EmpName ?? r.emp_name ?? r.Emp_Name,
-        unit_code: r.UnitCode ?? r.unit_code ?? fallbackUnit,
-        floor_name: r.FloorName ?? r.floor_name ?? fallbackFloor,
-        line_name: r.LineName ?? r.line_name ?? fallbackLine,
-        part_name: r.PartName ?? r.part_name ?? fallbackPart,
-        new_oper_seq: r.NewOperSeq ?? r.new_oper_seq,
-        operation: r.Operation ?? r.operation,
-        production: r.ProdnPcs ?? r.production ?? Number(r.ProdnPcs ?? 0),
-        target: r.Eff100 ?? r.target ?? Number(r.Eff100 ?? 0),
-        efficiency: r.EffPer ?? r.efficiency ?? Number(r.EffPer ?? 0),
-        phone_number: r.phone_number ?? r.PhoneNumber ?? null,
-        is_red_flag: r.IsRedFlag ?? r.is_red_flag ?? 0,
-        supervisor_name: r.supervisor_name ?? r.SupervisorName,
-        supervisor_code: r.supervisor_code ?? r.SupervisorCode,
-        __raw: r,
-      });
-    });
-  }
+    }
 
-  return result;
-};
-
+    return result;
+  };
 
   // Create employee list from flaggedQ
   const flaggedEmployees = useMemo(() => {
@@ -355,6 +399,29 @@ export default function FabricPulseDashboard() {
       return [];
     }
   }, [flaggedQ.data]);
+  // Normalize API response to consistent employee objects
+  const normalizeOperationEmployees = (payload: any) => {
+    if (!payload) return [];
+    const rows = Array.isArray(payload.data) ? payload.data : payload;
+    if (!Array.isArray(rows)) return [];
+    return rows.map((r: any) => ({
+      emp_code: r.EmpCode ?? r.emp_code,
+      emp_name: r.EmpName ?? r.emp_name,
+      unit_code: r.UnitCode ?? r.unit_code,
+      floor_name: r.FloorName ?? r.floor_name,
+      line_name: r.LineName ?? r.line_name,
+      part_name: r.PartName ?? r.part_name,
+      operation:
+        r.Operation ?? r.OperationName ?? r.NewOperSeq ?? r.new_oper_seq,
+      production: Number(r.ProdnPcs ?? r.production ?? 0),
+      target: Number(r.Eff100 ?? r.target ?? 0),
+      efficiency: Number(
+        typeof r.EffPer !== "undefined" ? r.EffPer : r.efficiency ?? 0
+      ),
+      is_red_flag: Number(r.IsRedFlag ?? r.is_red_flag ?? 0),
+      __raw: r,
+    }));
+  };
 
   // ---------------- Employee Efficiency bar data (from /api/rtms/flagged)
   const getEmployeeEfficiencyBarData = () => {
@@ -443,63 +510,282 @@ export default function FabricPulseDashboard() {
   };
 
   // Chart for flagged parts (existing dataset)
-  const flaggedPartsChartData = useMemo(() => {
-    const payload: any = flaggedQ.data;
-    if (!payload) {
-      return {
-        labels: [],
-        datasets: [
-          {
-            label: "Flagged employees by part",
-            data: [],
-            backgroundColor: "rgba(54, 162, 235, 0.7)", // Blue fill
-            borderColor: "rgba(54, 162, 235, 1)", // Blue border
-            borderWidth: 1,
-          },
-        ],
-      };
+  // const flaggedPartsChartData = useMemo(() => {
+  //   const payload: any = flaggedQ.data;
+  //   if (!payload) {
+  //     return {
+  //       labels: [],
+  //       datasets: [
+  //         {
+  //           label: "Employee Details By Part Wise",
+  //           data: [],
+  //           backgroundColor: "rgba(54, 162, 235, 0.7)", // Blue fill
+  //           borderColor: "rgba(54, 162, 235, 1)", // Blue border
+  //           borderWidth: 1,
+  //         },
+  //       ],
+  //     };
+  //   }
+
+  //   if (payload?.data?.parts && Array.isArray(payload.data.parts)) {
+  //     const parts: FlaggedPartGroup[] = payload.data.parts;
+  //     return {
+  //       labels: parts.map((p) => p.part_name),
+  //       datasets: [
+  //         {
+  //           label: "Flagged employees by part",
+  //           data: parts.map((p) => p.employee_count),
+  //           backgroundColor: parts.map(() => "rgba(54, 162, 235, 0.7)"), // force all bars blue
+  //           borderColor: parts.map(() => "rgba(54, 162, 235, 1)"),
+  //           borderWidth: 1,
+  //         },
+  //       ],
+  //     };
+  //   }
+
+  //   const rows = (payload as any).data ?? [];
+  //   const tally = new Map<string, number>();
+  //   rows.forEach((r: any) => {
+  //     const key = r.PartName ?? "Unknown";
+  //     tally.set(key, (tally.get(key) ?? 0) + 1);
+  //   });
+
+  //   return {
+  //     labels: Array.from(tally.keys()),
+  //     datasets: [
+  //       {
+  //         label: "Flagged employees by part",
+  //         data: Array.from(tally.values()),
+  //         backgroundColor: Array.from(tally.keys()).map(
+  //           () => "rgba(54, 162, 235, 0.7)"
+  //         ),
+  //         borderColor: Array.from(tally.keys()).map(
+  //           () => "rgba(54, 162, 235, 1)"
+  //         ),
+  //         borderWidth: 1,
+  //       },
+  //     ],
+  //   };
+  // }, [flaggedQ.data]);
+  // Build chart data + tooltip handler for Employee Details By Part Wise
+  const opEmployees = useMemo(() => {
+    if (!operationEmpQ.data) return [];
+    try {
+      return normalizeOperationEmployees(operationEmpQ.data);
+    } catch {
+      return [];
     }
+  }, [operationEmpQ.data]);
 
-    if (payload?.data?.parts && Array.isArray(payload.data.parts)) {
-      const parts: FlaggedPartGroup[] = payload.data.parts;
-      return {
-        labels: parts.map((p) => p.part_name),
-        datasets: [
-          {
-            label: "Flagged employees by part",
-            data: parts.map((p) => p.employee_count),
-            backgroundColor: parts.map(() => "rgba(54, 162, 235, 0.7)"), // force all bars blue
-            borderColor: parts.map(() => "rgba(54, 162, 235, 1)"),
-            borderWidth: 1,
-          },
-        ],
-      };
+ const employeeDetailsChart = useMemo(() => {
+  if (!opEmployees || opEmployees.length === 0) return null;
+
+  // Overall top performer
+  const top = opEmployees.reduce((a, b) => (a.efficiency > b.efficiency ? a : b), opEmployees[0]);
+  const topEff = Number(top.efficiency ?? 0);
+  const safeThreshold = topEff * 0.85;
+
+  const labels = opEmployees.map((e) => String(e.operation ?? "—"));
+  const data = opEmployees.map((e) => Number(e.efficiency ?? 0));
+
+  const backgroundColor = opEmployees.map((e) => {
+    if (e.emp_code && top.emp_code && e.emp_code === top.emp_code) return "rgba(56,161,105,0.95)"; // green
+    if (topEff > 0 && Number(e.efficiency ?? 0) >= safeThreshold) return "rgba(245,158,11,0.95)"; // yellow/amber
+    return "rgba(239,68,68,0.95)"; // red
+  });
+
+  const borderColor = backgroundColor.map((c) => c.replace("0.95", "1"));
+
+  // Suggest max = either 110 or 10% above top performer to avoid clipping / strange scale
+  const suggestedMax = Math.max(110, Math.ceil(topEff * 1.1));
+
+  return {
+    labels,
+    datasets: [
+      {
+        label: "Efficiency %",
+        data,
+        backgroundColor,
+        borderColor,
+        borderWidth: 1,
+      },
+    ],
+    meta: { employees: opEmployees, top, topEff, safeThreshold, suggestedMax },
+  } as ChartData<"bar", number[], string> & { meta?: any };
+}, [opEmployees]);
+
+
+  // Tooltip container helper
+  const getOrCreateTooltip = (chart: any) => {
+    const id = "employee-details-tooltip";
+    let el = document.getElementById(id) as HTMLDivElement | null;
+    if (!el) {
+      el = document.createElement("div");
+      el.id = id;
+      el.style.pointerEvents = "none";
+      el.style.position = "absolute";
+      el.style.transform = "translate(-50%, 0)";
+      el.style.transition = "all .08s ease";
+      el.style.zIndex = "9999";
+      el.style.minWidth = "180px";
+      el.style.maxWidth = "320px";
+      el.style.padding = "10px";
+      el.style.borderRadius = "8px";
+      el.style.boxShadow = "0 6px 18px rgba(0,0,0,0.12)";
+      el.style.background = "rgba(15,23,42,0.96)";
+      el.style.color = "#fff";
+      el.style.fontSize = "13px";
+      document.body.appendChild(el);
     }
+    return el;
+  };
 
-    const rows = (payload as any).data ?? [];
-    const tally = new Map<string, number>();
-    rows.forEach((r: any) => {
-      const key = r.PartName ?? "Unknown";
-      tally.set(key, (tally.get(key) ?? 0) + 1);
-    });
+ const externalTooltipHandler = (context: any) => {
+  const { chart, tooltip } = context;
+  const tooltipEl = getOrCreateTooltip(chart);
 
-    return {
-      labels: Array.from(tally.keys()),
-      datasets: [
-        {
-          label: "Flagged employees by part",
-          data: Array.from(tally.values()),
-          backgroundColor: Array.from(tally.keys()).map(
-            () => "rgba(54, 162, 235, 0.7)"
-          ),
-          borderColor: Array.from(tally.keys()).map(
-            () => "rgba(54, 162, 235, 1)"
-          ),
-          borderWidth: 1,
-        },
-      ],
+  // hide fast if no tooltip
+  if (!tooltip || tooltip.opacity === 0) {
+    tooltipEl.style.opacity = "0";
+    return;
+  }
+
+  // safe extract datapoint info
+  const dp = tooltip.dataPoints && tooltip.dataPoints[0];
+  const dataIndex = dp?.dataIndex ?? -1;
+  const datasetIndex = dp?.datasetIndex ?? 0;
+
+  // fallback if no index
+  if (dataIndex < 0) {
+    tooltipEl.style.opacity = "0";
+    return;
+  }
+
+  // employees stored in chart.data.meta.employees (set earlier)
+  const chartDataAny: any = chart.data;
+  const meta = chartDataAny?.meta ?? {};
+  const employees = meta.employees ?? [];
+
+  // get employee object robustly (try several fallbacks)
+  let emp = employees[dataIndex];
+  if (!emp) {
+    // fallback to reading from raw dataset (if meta missing)
+    const ds = chart.data.datasets?.[datasetIndex];
+    const rawVal = ds?.data?.[dataIndex];
+    emp = {
+      emp_name: String(chart.data.labels?.[dataIndex] ?? "Unknown"),
+      efficiency: rawVal ?? 0,
+      production: (ds && ds.__production && ds.__production[dataIndex]) || 0,
+      target: (ds && ds.__target && ds.__target[dataIndex]) || 0,
+      operation: String(chart.data.labels?.[dataIndex] ?? "—"),
     };
-  }, [flaggedQ.data]);
+  }
+
+  const eff = Number(emp?.efficiency ?? 0);
+  const prod = Number(emp?.production ?? 0);
+  const targ = Number(emp?.target ?? 0);
+
+  const topEmp = meta.top;
+  const safeThreshold = meta.safeThreshold ?? 0;
+  const badgeColor =
+    emp?.emp_code && topEmp?.emp_code && emp.emp_code === topEmp.emp_code
+      ? "#16a34a"
+      : eff >= safeThreshold
+      ? "#f59e0b"
+      : "#ef4444";
+
+  // Build HTML (always show something)
+  tooltipEl.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">
+      <div style="font-weight:700;font-size:14px">${emp?.emp_name ?? emp?.EmpName ?? "—"}</div>
+      <div style="font-size:12px;padding:4px 8px;border-radius:999px;background:${badgeColor};color:#fff;font-weight:700">
+        ${isNaN(eff) ? "N/A" : eff.toFixed(1)}%
+      </div>
+    </div>
+    <div style="font-size:13px;color:rgba(255,255,255,0.85);margin-bottom:6px">
+      <div><strong>Operation:</strong> ${emp?.operation ?? emp?.Operation ?? "—"}</div>
+    </div>
+    <div style="font-size:13px;color:rgba(255,255,255,0.85)">
+      <div><strong>Production:</strong> ${prod} / ${targ}</div>
+    </div>
+  `;
+
+  // compute position - prefer element coords, fallback to caretX/caretY
+  const canvasRect = chart.canvas.getBoundingClientRect();
+  const element = dp?.element ?? dp?.element ?? chart.getDatasetMeta(datasetIndex)?.data?.[dataIndex];
+  const localX = (element && element.x) ?? (tooltip.caretX ?? 0);
+  const localY = (element && element.y) ?? (tooltip.caretY ?? 0);
+
+  // position above the bar, but if that pushes tooltip off-screen, show below
+  const topAbove = canvasRect.top + localY - tooltipEl.offsetHeight - 8;
+  const topBelow = canvasRect.top + localY + 8;
+  let finalTop = topAbove;
+  if (finalTop < 8) finalTop = topBelow; // not enough room above
+
+  // horizontal: center over the bar, but avoid overflow at edges
+  let finalLeft = canvasRect.left + localX;
+  const pageWidth = document.documentElement.clientWidth || window.innerWidth;
+  const tooltipWidth = Math.min(320, tooltipEl.offsetWidth || 220);
+  if (finalLeft + tooltipWidth / 2 > pageWidth - 8) finalLeft = pageWidth - tooltipWidth / 2 - 8;
+  if (finalLeft - tooltipWidth / 2 < 8) finalLeft = tooltipWidth / 2 + 8;
+
+  tooltipEl.style.left = `${finalLeft}px`;
+  tooltipEl.style.top = `${finalTop}px`;
+  tooltipEl.style.opacity = "1";
+  tooltipEl.style.pointerEvents = "none";
+};
+
+
+  // Chart options using external tooltip
+const employeeChartOptions: ChartOptions<"bar"> = {
+  responsive: true,
+  maintainAspectRatio: false,
+  interaction: {
+    mode: "nearest",
+    intersect: true,
+  },
+  plugins: {
+    legend: { display: false },
+    tooltip: { enabled: false, external: externalTooltipHandler },
+    zoom: {
+      zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: "x" },
+    },
+  },
+  scales: {
+    x: {
+      title: { display: true, text: "Operation" },
+      ticks: {
+        autoSkip: false,
+        maxRotation: 40,
+        minRotation: 0,
+        callback: function (val: any, index: number) {
+          const v = this.getLabelForValue(index as any) as string;
+          if (v && v.length > 22) return v.slice(0, 20) + "…";
+          return v;
+        },
+      },
+    },
+    y: {
+      beginAtZero: true,
+      title: { display: true, text: "Efficiency (%)" },
+      // default fallback; Chart will be re-rendered when `employeeDetailsChart.meta.suggestedMax` changes
+      suggestedMax: 110,
+      ticks: {
+        stepSize: 10,
+      },
+    },
+  },
+  animation: { duration: 400, easing: "easeOutQuart" },
+};
+
+
+  // cleanup tooltip on unmount
+  useEffect(() => {
+    return () => {
+      const el = document.getElementById("employee-details-tooltip");
+      if (el) el.remove();
+    };
+  }, []);
 
   // Recent activity grouped by supervisor — but include full location & operation and production
   const recentActivityBySupervisor = useMemo(() => {
@@ -835,24 +1121,35 @@ export default function FabricPulseDashboard() {
             transition={{ delay: 0.45 }}
           >
             <Card className="shadow-card glass-card border-success/20">
-              <CardHeader>
+              {/* <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-success">
                   <BarChart3 className="h-5 w-5" /> Flagged by Part
                 </CardTitle>
                 <p className="text-sm text-muted-foreground">
                   {part ? `Part: ${part}` : "Flagged distribution"}
                 </p>
-              </CardHeader>
+              </CardHeader> */}
               <CardContent>
-                <div className="h-80">
-                  <Bar
-                    data={flaggedPartsChartData}
-                    options={{
-                      responsive: true,
-                      maintainAspectRatio: false,
-                      plugins: { legend: { display: true } },
-                    }}
-                  />
+                {/* Employee Details By Part Wise */}
+                <div className="card">
+                  <div className="card-header">
+                    <h3>Employee Details By Part Wise</h3>
+                    <div className="muted small">
+                      X: Operation — Y: Efficiency (%)
+                    </div>
+                  </div>
+                  <div className="card-body" style={{ height: 320 }}>
+                    {employeeDetailsChart ? (
+                      <Bar
+                        data={employeeDetailsChart}
+                        options={employeeChartOptions}
+                      />
+                    ) : (
+                      <div className="muted">
+                        No employee data for selected filters
+                      </div>
+                    )}
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -889,7 +1186,9 @@ export default function FabricPulseDashboard() {
                       viewport={{ once: true, amount: 0.2 }}
                       transition={{ delay: 0.03 * sidx }}
                     >
-                      <h3 className="font-semibold text-primary mb-2">Supervisor Name: {sup}</h3>
+                      <h3 className="font-semibold text-primary mb-2">
+                        Supervisor Name: {sup}
+                      </h3>
                       <ul className="space-y-2 text-sm">
                         {emps.map((emp, idx) => (
                           <li
@@ -914,10 +1213,8 @@ export default function FabricPulseDashboard() {
 
                               <div className="text-xs text-muted-foreground mt-1 space-y-1">
                                 <div>
-                                  <strong>Location:</strong>{" "}
-                                  {emp.unit_code } →{" "}
-                                  {emp.floor_name } →{" "}
-                                  {emp.line_name ?? "—"} →{" "}
+                                  <strong>Location:</strong> {emp.unit_code} →{" "}
+                                  {emp.floor_name} → {emp.line_name ?? "—"} →{" "}
                                   {emp.part_name ?? "—"}
                                 </div>
                                 <div>
